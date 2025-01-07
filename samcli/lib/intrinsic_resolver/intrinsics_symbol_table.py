@@ -1,6 +1,7 @@
 """
 The symbol table that is used in IntrinsicResolver in order to resolve runtime attributes
 """
+
 import logging
 import os
 
@@ -80,6 +81,8 @@ class IntrinsicsSymbolTable:
     CFN_RESOURCE_TYPE = "Type"
     CFN_RESOURCE_PROPERTIES = "Properties"
     CFN_LAMBDA_FUNCTION_NAME = "FunctionName"
+
+    COMMA_DELIMITED_LIST = "CommaDelimitedList"
 
     def __init__(
         self, template=None, logical_id_translator=None, default_type_resolver=None, common_attribute_resolver=None
@@ -323,6 +326,16 @@ class IntrinsicsSymbolTable:
         if any(isinstance(logical_id_item, object_type) for object_type in [str, list, bool, int]):
             if resource_attributes not in (IntrinsicResolver.REF, ""):
                 return None
+            parameter_info = self._parameters.get(logical_id)
+            if (
+                parameter_info
+                and parameter_info.get(IntrinsicsSymbolTable.CFN_RESOURCE_TYPE)
+                == IntrinsicsSymbolTable.COMMA_DELIMITED_LIST
+                and isinstance(logical_id_item, str)
+            ):
+                # If the reference is a comma-delimited list represented as a string,
+                # return the reference as a list of items instead
+                return [item.strip() for item in logical_id_item.split(",")]
             return logical_id_item
 
         return logical_id_item.get(resource_attributes)

@@ -1,9 +1,10 @@
 """
 Deploy Command Options related Datastructures for formatting.
 """
+
 from typing import Dict, List
 
-from samcli.cli.core.options import ALL_COMMON_OPTIONS, add_common_options_info
+from samcli.cli.core.options import ALL_COMMON_OPTIONS, SAVE_PARAMS_OPTIONS, add_common_options_info
 from samcli.cli.row_modifiers import RowDefinition
 
 # The ordering of the option lists matter, they are the order in which options will be displayed.
@@ -36,9 +37,10 @@ DEPLOYMENT_OPTIONS: List[str] = [
     "disable_rollback",
     "on_failure",
     "force_upload",
+    "max_wait_duration",
 ]
 
-CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"]
+CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"] + SAVE_PARAMS_OPTIONS
 
 ADDITIONAL_OPTIONS: List[str] = [
     "no_progressbar",

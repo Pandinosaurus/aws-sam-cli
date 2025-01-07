@@ -1,8 +1,10 @@
 """SyncFlow for ZIP based Lambda Functions"""
+
 import base64
 import hashlib
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from contextlib import ExitStack
@@ -86,10 +88,10 @@ class ZipFunctionSyncFlow(FunctionSyncFlow):
     def gather_resources(self) -> None:
         """Build function and ZIP it into a temp file in self._zip_file"""
         if self._application_build_result:
-            LOG.debug("Using pre-built resources for function {}", self._function_identifier)
+            LOG.debug("Using pre-built resources for function %s", self._function_identifier)
             self._use_prebuilt_resources(self._application_build_result)
         else:
-            LOG.debug("Building function from scratch {}", self._function_identifier)
+            LOG.debug("Building function from scratch %s", self._function_identifier)
             self._build_resources_from_scratch()
 
         zip_file_path = os.path.join(tempfile.gettempdir(), "data-" + uuid.uuid4().hex)
@@ -226,3 +228,28 @@ class ZipFunctionSyncFlow(FunctionSyncFlow):
     @staticmethod
     def _combine_dependencies() -> bool:
         return True
+
+
+class ZipFunctionSyncFlowSkipBuildZipFile(ZipFunctionSyncFlow):
+    """
+    Alternative implementation for ZipFunctionSyncFlow, which uses pre-built zip file for running sync flow
+    """
+
+    def gather_resources(self) -> None:
+        self._zip_file = os.path.join(tempfile.gettempdir(), f"data-{uuid.uuid4().hex}")
+        shutil.copy2(cast(str, self._function.codeuri), self._zip_file)
+        LOG.debug("%sCreated artifact ZIP file: %s", self.log_prefix, self._zip_file)
+        self._local_sha = file_checksum(self._zip_file, hashlib.sha256())
+
+
+class ZipFunctionSyncFlowSkipBuildDirectory(ZipFunctionSyncFlow):
+    """
+    Alternative implementation for ZipFunctionSyncFlow, which doesn't build function but zips folder directly
+    since function is annotated with SkipBuild inside its Metadata
+    """
+
+    def gather_resources(self) -> None:
+        zip_file_path = os.path.join(tempfile.gettempdir(), f"data-{uuid.uuid4().hex}")
+        self._zip_file = make_zip_with_lambda_permissions(zip_file_path, self._function.codeuri)
+        LOG.debug("%sCreated artifact ZIP file: %s", self.log_prefix, self._zip_file)
+        self._local_sha = file_checksum(cast(str, self._zip_file), hashlib.sha256())

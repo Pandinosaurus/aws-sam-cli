@@ -2,12 +2,14 @@
 Integration tests for sam validate
 """
 
+import json
 import os
 import re
+import tempfile
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional
-from unittest import TestCase
+from unittest import TestCase, skip
 from unittest.case import skipIf
 
 from parameterized import parameterized
@@ -123,6 +125,88 @@ class TestValidate(TestCase):
         self.assertEqual(command_result.process.returncode, 0)
         self.assertRegex(output, pattern)
 
+    @parameterized.expand(
+        [
+            ("nodejs16.x",),
+        ]
+    )
+    def test_lint_deprecated_runtimes(self, runtime):
+        template = {
+            "AWSTemplateFormatVersion": "2010-09-09",
+            "Transform": "AWS::Serverless-2016-10-31",
+            "Resources": {
+                "HelloWorldFunction": {
+                    "Type": "AWS::Serverless::Function",
+                    "Properties": {
+                        "CodeUri": "HelloWorldFunction",
+                        "Handler": "app.lambdaHandler",
+                        "Runtime": runtime,
+                    },
+                }
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as temp:
+            template_file = Path(temp, "template.json")
+            with open(template_file, "w") as f:
+                f.write(json.dumps(template, indent=4) + "\n")
+
+            command_result = run_command(self.command_list(lint=True), cwd=str(temp))
+
+            output = command_result.stdout.decode("utf-8")
+            self.assertEqual(command_result.process.returncode, 1)
+            self.assertRegex(
+                output,
+                f"\\[\\[W2531: Check if EOL Lambda Function Runtimes are used] "
+                f"\\(Runtime \\'{runtime}'\\ was deprecated on.*",
+            )
+
+    def test_lint_supported_runtimes(self):
+        template = {
+            "AWSTemplateFormatVersion": "2010-09-09",
+            "Transform": "AWS::Serverless-2016-10-31",
+            "Resources": {},
+        }
+        supported_runtimes = [
+            "dotnet8",
+            "java21",
+            "java17",
+            "java11",
+            "java8.al2",
+            "nodejs18.x",
+            "nodejs20.x",
+            "nodejs22.x",
+            "provided.al2",
+            "provided.al2023",
+            "python3.9",
+            "python3.10",
+            "python3.11",
+            "python3.12",
+            "python3.13",
+            "ruby3.2",
+            "ruby3.3",
+        ]
+        i = 0
+        for runtime in supported_runtimes:
+            i += 1
+            template["Resources"][f"HelloWorldFunction{i}"] = {
+                "Type": "AWS::Serverless::Function",
+                "Properties": {
+                    "CodeUri": "HelloWorldFunction",
+                    "Handler": "app.lambdaHandler",
+                    "Runtime": runtime,
+                },
+            }
+        with tempfile.TemporaryDirectory() as temp:
+            template_file = Path(temp, "template.json")
+            with open(template_file, "w") as f:
+                f.write(json.dumps(template, indent=4) + "\n")
+            command_result = run_command(self.command_list(lint=True), cwd=str(temp))
+            pattern = self.lint_patterns[TemplateFileTypes.JSON]
+            output = command_result.stdout.decode("utf-8")
+            self.assertEqual(command_result.process.returncode, 0)
+            self.assertRegex(output, pattern)
+
     def test_lint_error_no_region(self):
         test_data_path = Path(__file__).resolve().parents[2] / "integration" / "testdata" / "validate" / "default_json"
         template_file = "template.json"
@@ -141,7 +225,10 @@ class TestValidate(TestCase):
         command_result = run_command(self.command_list(lint=True, region="us-north-5", template_file=template_path))
         output = command_result.stderr.decode("utf-8")
 
-        error_message = f"Error: AWS Region was not found. Please configure your region through the --region option"
+        error_message = (
+            f"Error: AWS Region was not found. Please configure your region through the --region option.{os.linesep}"
+            f"Regions ['us-north-5'] are unsupported. Supported regions are"
+        )
 
         self.assertIn(error_message, output)
 
@@ -155,10 +242,10 @@ class TestValidate(TestCase):
         output = output.replace("\r", "")
 
         warning_message = (
-            'E0000 Duplicate found "HelloWorldFunction" (line 5)\n'
-            f'{os.path.join(test_data_path, "templateError.yaml")}:5:3\n\n'
-            'E0000 Duplicate found "HelloWorldFunction" (line 12)\n'
-            f'{os.path.join(test_data_path, "templateError.yaml")}:12:3\n\n'
+            "[[E0000: Parsing error found when parsing the template] "
+            '(Duplicate found "HelloWorldFunction" (line 5)) matched 5, '
+            "[E0000: Parsing error found when parsing the template] "
+            '(Duplicate found "HelloWorldFunction" (line 12)) matched 12]\n'
         )
 
         self.assertIn(warning_message, output)

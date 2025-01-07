@@ -1,30 +1,32 @@
 """
 Keeps implementation of different build strategies
 """
+
 import hashlib
 import logging
 import os.path
 import pathlib
 import shutil
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 from copy import deepcopy
-from typing import Callable, Dict, List, Any, Optional, cast, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, cast
 
-from samcli.commands._utils.experimental import is_experimental_enabled, ExperimentalFlag
-from samcli.lib.utils import osutils
-from samcli.lib.utils.async_utils import AsyncContext
-from samcli.lib.utils.hash import dir_checksum
-from samcli.lib.utils.packagetype import ZIP, IMAGE
-from samcli.lib.build.dependency_hash_generator import DependencyHashGenerator
+from samcli.commands._utils.experimental import ExperimentalFlag, is_experimental_enabled
 from samcli.lib.build.build_graph import (
+    DEFAULT_DEPENDENCIES_DIR,
+    AbstractBuildDefinition,
     BuildGraph,
     FunctionBuildDefinition,
     LayerBuildDefinition,
-    AbstractBuildDefinition,
-    DEFAULT_DEPENDENCIES_DIR,
 )
+from samcli.lib.build.dependency_hash_generator import DependencyHashGenerator
 from samcli.lib.build.exceptions import MissingBuildMethodException
-
+from samcli.lib.build.utils import warn_on_invalid_architecture
+from samcli.lib.utils import osutils
+from samcli.lib.utils.architecture import X86_64
+from samcli.lib.utils.async_utils import AsyncContext
+from samcli.lib.utils.hash import dir_checksum
+from samcli.lib.utils.packagetype import IMAGE, ZIP
 
 LOG = logging.getLogger(__name__)
 
@@ -126,7 +128,9 @@ class DefaultBuildStrategy(BuildStrategy):
         self,
         build_graph: BuildGraph,
         build_dir: str,
-        build_function: Callable[[str, str, str, str, str, Optional[str], str, dict, dict, Optional[str], bool], str],
+        build_function: Callable[
+            [str, str, Optional[str], str, str, str, Optional[str], str, dict, dict, Optional[str], bool], str
+        ],
         build_layer: Callable[[str, str, str, List[str], str, str, dict, Optional[str], bool, Optional[Dict]], str],
         cached: bool = False,
     ) -> None:
@@ -142,10 +146,9 @@ class DefaultBuildStrategy(BuildStrategy):
         """
         function_build_results = {}
         LOG.info(
-            "Building codeuri: %s runtime: %s metadata: %s architecture: %s functions: %s",
+            "Building codeuri: %s runtime: %s architecture: %s functions: %s",
             build_definition.codeuri,
             build_definition.runtime,
-            build_definition.metadata,
             build_definition.architecture,
             build_definition.get_resource_full_paths(),
         )
@@ -164,6 +167,7 @@ class DefaultBuildStrategy(BuildStrategy):
         result = self._build_function(
             build_definition.get_function_name(),
             build_definition.codeuri,  # type: ignore
+            build_definition.imageuri,
             build_definition.packagetype,
             build_definition.runtime,  # type: ignore
             build_definition.architecture,
@@ -214,6 +218,22 @@ class DefaultBuildStrategy(BuildStrategy):
                 f"Please provide BuildMethod in Metadata."
             )
 
+        if layer.build_method == "makefile":
+            warn_on_invalid_architecture(layer_definition)
+
+        # There are two cases where we'd like to warn the customer
+        # 1. Compatible Architectures is only x86 (or not present) but Build Architecture is arm64
+        # 2. Build Architecture is x86 (or not present) but Compatible Architectures is only arm64
+
+        build_architecture = layer.build_architecture or X86_64
+        compatible_architectures = layer.compatible_architectures or [X86_64]
+
+        if build_architecture not in compatible_architectures:
+            LOG.warning(
+                "WARNING: Layer '%s' has BuildArchitecture %s, which is not listed in CompatibleArchitectures",
+                layer.layer_id,
+                build_architecture,
+            )
         single_build_dir = layer.get_build_dir(self._build_dir)
         # when a layer is passed here, it is ZIP function, codeuri and runtime are not None
         # codeuri and compatible_runtimes are not None
@@ -326,6 +346,7 @@ class CachedBuildStrategy(BuildStrategy):
         """
         Builds single layer definition with caching
         """
+
         code_dir = str(pathlib.Path(self._base_dir, cast(str, layer_definition.codeuri)).resolve())
         source_hash = dir_checksum(code_dir, ignore_list=[".aws-sam"], hash_generator=hashlib.sha256())
         cache_function_dir = pathlib.Path(self._cache_dir, layer_definition.uuid)

@@ -1,10 +1,11 @@
 """
 Build Command Options related Datastructures for formatting.
 """
+
 from typing import Dict, List
 
+from samcli.cli.core.options import ALL_COMMON_OPTIONS, SAVE_PARAMS_OPTIONS, add_common_options_info
 from samcli.cli.row_modifiers import RowDefinition
-from samcli.cli.core.options import ALL_COMMON_OPTIONS, add_common_options_info
 
 # NOTE(sriram-mv): The ordering of the option lists matter, they are the order
 # in which options will be displayed.
@@ -23,11 +24,11 @@ CONTAINER_OPTION_NAMES: List[str] = [
     "docker_network",
 ]
 
-CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"]
+CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"] + SAVE_PARAMS_OPTIONS
 
 EXTENSION_OPTIONS: List[str] = ["hook_name", "skip_prepare_infra"]
 
-BUILD_STRATEGY_OPTIONS: List[str] = ["parallel", "exclude", "manifest", "cached"]
+BUILD_STRATEGY_OPTIONS: List[str] = ["parallel", "exclude", "manifest", "cached", "build_in_source"]
 
 ARTIFACT_LOCATION_OPTIONS: List[str] = [
     "build_dir",
@@ -36,6 +37,8 @@ ARTIFACT_LOCATION_OPTIONS: List[str] = [
 ]
 
 TEMPLATE_OPTIONS: List[str] = ["parameter_overrides"]
+
+TERRAFORM_HOOK_OPTIONS: List[str] = ["terraform_project_root_path"]
 
 ALL_OPTIONS: List[str] = (
     REQUIRED_OPTIONS
@@ -47,6 +50,7 @@ ALL_OPTIONS: List[str] = (
     + EXTENSION_OPTIONS
     + CONFIGURATION_OPTION_NAMES
     + ALL_COMMON_OPTIONS
+    + TERRAFORM_HOOK_OPTIONS
 )
 
 OPTIONS_INFO: Dict[str, Dict] = {
@@ -71,5 +75,6 @@ OPTIONS_INFO: Dict[str, Dict] = {
             ),
         ],
     },
+    "Terraform Hook Options": {"option_names": {opt: {"rank": idx} for idx, opt in enumerate(TERRAFORM_HOOK_OPTIONS)}},
 }
 add_common_options_info(OPTIONS_INFO)

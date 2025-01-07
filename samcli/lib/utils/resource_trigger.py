@@ -1,4 +1,6 @@
 """ResourceTrigger Classes for Creating PathHandlers According to a Resource"""
+
+import logging
 import platform
 import re
 from abc import ABC, abstractmethod
@@ -6,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
 from typing_extensions import Protocol
-from watchdog.events import FileSystemEvent, RegexMatchingEventHandler
+from watchdog.events import EVENT_TYPE_OPENED, FileSystemEvent, RegexMatchingEventHandler
 
 from samcli.lib.providers.exceptions import InvalidTemplateFile, MissingCodeUri, MissingLocalDefinition
 from samcli.lib.providers.provider import Function, LayerVersion, ResourceIdentifier, Stack, get_resource_by_id
@@ -17,7 +19,10 @@ from samcli.lib.utils.path_observer import PathHandler
 from samcli.lib.utils.resources import RESOURCES_WITH_LOCAL_PATHS
 from samcli.local.lambdafn.exceptions import FunctionNotFound, ResourceNotFound
 
-AWS_SAM_FOLDER_REGEX = "^.*\\.aws-sam.*$"
+LOG = logging.getLogger(__name__)
+
+
+DEFAULT_WATCH_IGNORED_RESOURCES = ["^.*\\.aws-sam.*$", "^.*node_modules.*$"]
 
 
 class OnChangeCallback(Protocol):
@@ -133,12 +138,21 @@ class TemplateTrigger(ResourceTrigger):
         ----------
         event : Optional[FileSystemEvent], optional
         """
+        if event and event.event_type == EVENT_TYPE_OPENED:
+            # Ignore all file opened events since this event is
+            # added in addition to a create or modified event,
+            # causing an infinite loop of sync flow creations
+            LOG.debug("Ignoring file system OPENED event")
+            return
+        LOG.debug(
+            "Template watcher (%s) for stack (%s) got file event %s", self._template_file, self._stack_name, event
+        )
         if self._validator.validate_change():
             self._on_template_change(event)
 
     def get_path_handlers(self) -> List[PathHandler]:
         file_path_handler = ResourceTrigger.get_single_file_path_handler(Path(self._template_file))
-        file_path_handler.event_handler.on_any_event = self._validator_wrapper
+        file_path_handler.event_handler.on_any_event = self._validator_wrapper  # type: ignore
         return [file_path_handler]
 
 
@@ -155,6 +169,7 @@ class CodeResourceTrigger(ResourceTrigger):
         stacks: List[Stack],
         base_dir: Path,
         on_code_change: OnChangeCallback,
+        watch_exclude: Optional[List[str]] = None,
     ):
         """
         Parameters
@@ -182,6 +197,10 @@ class CodeResourceTrigger(ResourceTrigger):
         self._on_code_change = on_code_change
         self.base_dir = base_dir
 
+        self._watch_exclude = [*DEFAULT_WATCH_IGNORED_RESOURCES]
+        for exclude in watch_exclude or []:
+            self._watch_exclude.append(f"^.*{exclude}.*$")
+
 
 class LambdaFunctionCodeTrigger(CodeResourceTrigger):
     _function: Function
@@ -193,6 +212,7 @@ class LambdaFunctionCodeTrigger(CodeResourceTrigger):
         stacks: List[Stack],
         base_dir: Path,
         on_code_change: OnChangeCallback,
+        watch_exclude: Optional[List[str]] = None,
     ):
         """
         Parameters
@@ -213,7 +233,7 @@ class LambdaFunctionCodeTrigger(CodeResourceTrigger):
         MissingCodeUri
             raised when there is no CodeUri property in the function definition.
         """
-        super().__init__(function_identifier, stacks, base_dir, on_code_change)
+        super().__init__(function_identifier, stacks, base_dir, on_code_change, watch_exclude)
         function = SamFunctionProvider(stacks).get(str(function_identifier))
         if not function:
             raise FunctionNotFound()
@@ -242,11 +262,11 @@ class LambdaFunctionCodeTrigger(CodeResourceTrigger):
             PathHandlers for the code folder associated with the function
         """
         dir_path_handler = ResourceTrigger.get_dir_path_handler(
-            self.base_dir.joinpath(self._code_uri), ignore_regexes=[AWS_SAM_FOLDER_REGEX]
+            self.base_dir.joinpath(self._code_uri), ignore_regexes=self._watch_exclude
         )
         dir_path_handler.self_create = self._on_code_change
         dir_path_handler.self_delete = self._on_code_change
-        dir_path_handler.event_handler.on_any_event = self._on_code_change
+        dir_path_handler.event_handler.on_any_event = self._on_code_change  # type: ignore
         return [dir_path_handler]
 
 
@@ -272,6 +292,7 @@ class LambdaLayerCodeTrigger(CodeResourceTrigger):
         stacks: List[Stack],
         base_dir: Path,
         on_code_change: OnChangeCallback,
+        watch_exclude: Optional[List[str]] = None,
     ):
         """
         Parameters
@@ -292,7 +313,7 @@ class LambdaLayerCodeTrigger(CodeResourceTrigger):
         MissingCodeUri
             raised when there is no CodeUri property in the function definition.
         """
-        super().__init__(layer_identifier, stacks, base_dir, on_code_change)
+        super().__init__(layer_identifier, stacks, base_dir, on_code_change, watch_exclude)
         layer = SamLayerProvider(stacks).get(str(layer_identifier))
         if not layer:
             raise ResourceNotFound()
@@ -310,11 +331,11 @@ class LambdaLayerCodeTrigger(CodeResourceTrigger):
             PathHandlers for the code folder associated with the layer
         """
         dir_path_handler = ResourceTrigger.get_dir_path_handler(
-            self.base_dir.joinpath(self._code_uri), ignore_regexes=[AWS_SAM_FOLDER_REGEX]
+            self.base_dir.joinpath(self._code_uri), ignore_regexes=self._watch_exclude
         )
         dir_path_handler.self_create = self._on_code_change
         dir_path_handler.self_delete = self._on_code_change
-        dir_path_handler.event_handler.on_any_event = self._on_code_change
+        dir_path_handler.event_handler.on_any_event = self._on_code_change  # type: ignore
         return [dir_path_handler]
 
 
@@ -365,7 +386,7 @@ class DefinitionCodeTrigger(CodeResourceTrigger):
         definition_file = self._resource.get("Properties", {}).get(property_name)
         if not definition_file or not isinstance(definition_file, str):
             raise MissingLocalDefinition(self._resource_identifier, property_name)
-        return definition_file
+        return cast(str, definition_file)
 
     def _validator_wrapper(self, event: Optional[FileSystemEvent] = None):
         """Wrapper for callback that only executes if the definition is valid and non-trivial changes are detected.
@@ -374,7 +395,7 @@ class DefinitionCodeTrigger(CodeResourceTrigger):
         ----------
         event : Optional[FileSystemEvent], optional
         """
-        if self._validator.validate_change():
+        if self._validator.validate_change(event):
             self._on_code_change(event)
 
     def get_path_handlers(self) -> List[PathHandler]:
@@ -385,5 +406,5 @@ class DefinitionCodeTrigger(CodeResourceTrigger):
             A single PathHandler for watching the definition file.
         """
         file_path_handler = ResourceTrigger.get_single_file_path_handler(self.base_dir.joinpath(self._definition_file))
-        file_path_handler.event_handler.on_any_event = self._validator_wrapper
+        file_path_handler.event_handler.on_any_event = self._validator_wrapper  # type: ignore
         return [file_path_handler]

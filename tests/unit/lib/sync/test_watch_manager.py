@@ -7,6 +7,8 @@ from samcli.lib.providers.exceptions import MissingCodeUri, MissingLocalDefiniti
 from samcli.lib.sync.exceptions import MissingPhysicalResourceError, SyncFlowException
 from parameterized import parameterized
 
+from samcli.local.lambdafn.exceptions import ResourceNotFound
+
 
 class TestWatchManager(TestCase):
     def setUp(self) -> None:
@@ -32,6 +34,7 @@ class TestWatchManager(TestCase):
             self.sync_context,
             False,
             False,
+            {},
         )
 
     def tearDown(self) -> None:
@@ -60,7 +63,7 @@ class TestWatchManager(TestCase):
             stacks,
         ]
         self.watch_manager._update_stacks()
-        get_stacks_mock.assert_called_once_with(self.template)
+        get_stacks_mock.assert_called_once_with(self.template, use_sam_transform=False)
         sync_flow_factory_mock.assert_called_once_with(
             self.build_context, self.deploy_context, self.sync_context, stacks, False
         )
@@ -83,6 +86,7 @@ class TestWatchManager(TestCase):
             MissingCodeUri(),
             trigger_2,
             MissingLocalDefinition(MagicMock(), MagicMock()),
+            ResourceNotFound(),
         ]
         self.watch_manager._stacks = [MagicMock()]
         self.watch_manager._trigger_factory = trigger_factory
@@ -92,8 +96,8 @@ class TestWatchManager(TestCase):
 
         self.watch_manager._add_code_triggers()
 
-        trigger_factory.create_trigger.assert_any_call(resource_ids[0], on_code_change_wrapper_mock.return_value)
-        trigger_factory.create_trigger.assert_any_call(resource_ids[1], on_code_change_wrapper_mock.return_value)
+        trigger_factory.create_trigger.assert_any_call(resource_ids[0], on_code_change_wrapper_mock.return_value, [])
+        trigger_factory.create_trigger.assert_any_call(resource_ids[1], on_code_change_wrapper_mock.return_value, [])
 
         on_code_change_wrapper_mock.assert_any_call(resource_ids[0])
         on_code_change_wrapper_mock.assert_any_call(resource_ids[1])
@@ -115,6 +119,7 @@ class TestWatchManager(TestCase):
         self.watch_manager._add_template_triggers()
 
         template_trigger_mock.assert_called_once_with(self.template, stack_name, ANY)
+        get_stack_mock.assert_called_with(self.template, use_sam_transform=False)
         self.path_observer.schedule_handlers.assert_any_call(trigger.get_path_handlers.return_value)
 
     @patch("samcli.lib.sync.watch_manager.TemplateTrigger")
@@ -351,6 +356,45 @@ class TestWatchManager(TestCase):
         callback()
 
         self.executor.add_delayed_sync_flow.assert_any_call(flow1, dedup=True, wait_time=ANY)
+
+    def test_on_code_change_wrapper_opened_event_not_called(self):
+        flow1 = MagicMock()
+        resource_id_mock = MagicMock()
+        factory_mock = MagicMock()
+        event_mock = MagicMock()
+        event_mock.event_type = "opened"
+
+        self.watch_manager._sync_flow_factory = factory_mock
+        factory_mock.create_sync_flow.return_value = flow1
+
+        self.watch_manager._on_code_change_wrapper(resource_id_mock)(event_mock)
+
+        factory_mock.create_sync_flow.assert_not_called()
+
+    @patch("samcli.lib.sync.watch_manager.platform.system")
+    def test_on_code_change_wrapper_opened_event_not_called_linux_folder(self, platform_mock):
+        flow1 = MagicMock()
+        resource_id_mock = MagicMock()
+        factory_mock = MagicMock()
+        event_mock = MagicMock()
+        event_mock.event_type = "modified"
+        event_mock.is_directory = True
+        platform_mock.return_value = "linux"
+
+        self.watch_manager._sync_flow_factory = factory_mock
+        factory_mock.create_sync_flow.return_value = flow1
+
+        self.watch_manager._on_code_change_wrapper(resource_id_mock)(event_mock)
+
+        factory_mock.create_sync_flow.assert_not_called()
+
+    def test_on_code_change_wrapper_missing_factory_sync_not_called(self):
+        resource_id_mock = MagicMock()
+
+        self.watch_manager._sync_flow_factory = None
+        self.watch_manager._on_code_change_wrapper(resource_id_mock)()
+
+        self.executor.add_delayed_sync_flow.assert_not_called()
 
     def test_watch_sync_flow_exception_handler_missing_physical(self):
         sync_flow = MagicMock()

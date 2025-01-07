@@ -4,13 +4,23 @@ python_library_zip_filename=$2
 build_binary_name=$3
 build_folder=$4
 python_version=$5
+openssl_version=$6
+zlib_version=$7
 
 if [ "$python_library_zip_filename" = "" ]; then
     python_library_zip_filename="python-libraries.zip";
 fi
 
 if [ "$python_version" = "" ]; then
-    python_version="3.11.3";
+    python_version="3.11.10";
+fi
+
+if [ "$openssl_version" = "" ]; then
+    openssl_version="3.3.1";
+fi
+
+if [ "$zlib_version" = "" ]; then
+    zlib_version="1.3.1";
 fi
 
 if [ "$CI_OVERRIDE" = "1" ]; then
@@ -26,9 +36,9 @@ else
     is_nightly="false"
 fi
 
-set -eu
+set -eux
 
-yum install -y zlib-devel libffi-devel bzip2-devel
+yum install -y libffi-devel perl-IPC-Cmd
 
 echo "Making Folders"
 mkdir -p .build/src
@@ -38,22 +48,52 @@ mkdir -p .build/output/pyinstaller-output
 mkdir -p .build/output/openssl
 cd .build/output/openssl
 
-curl "https://www.openssl.org/source/openssl-1.1.1t.tar.gz" --output openssl-1.1.1.tar.gz
-tar xzf openssl-1.1.1.tar.gz
-cd openssl-1.1.1t
-./config --prefix=/opt/openssl && make && make install
-cd ../../..
+echo "Building OpenSSL"
+curl -L "https://github.com/openssl/openssl/releases/download/openssl-${openssl_version}/openssl-${openssl_version}.tar.gz" --output openssl.tar.gz
+tar xzf openssl.tar.gz
+cd openssl-${openssl_version}
+# install_sw installs OpenSSL without manual pages
+./config --prefix=/opt/openssl && make -j8 && make -j8 install_sw
+ln -sf /opt/openssl/lib64 /opt/openssl/lib
+cd ../../
+
+echo "Building zlib"
+curl https://www.zlib.net/zlib-${zlib_version}.tar.gz --output zlib.tar.gz
+tar xvf zlib.tar.gz
+cd zlib-${zlib_version}
+./configure && make -j8 && make -j8 install
+cd ../
+
+echo "Building bzip2"
+mkdir bzip2 && cd bzip2
+git init
+git remote add origin https://gitlab.com/bzip2/bzip2.git
+# this is the 1.0.8 release
+# https://gitlab.com/bzip2/bzip2/-/tags
+# fetch specific commit as to not grab the entire git history
+git fetch origin 6a8690fc8d26c815e798c588f796eabe9d684cf0
+git reset --hard FETCH_HEAD
+make -j8 -f Makefile-libbz2_so
+cp libbz2.so.1.0.8 /usr/local/lib
+ln -s /usr/local/lib/libbz2.so.1.0.8 /usr/local/lib/libbz2.so.1.0
+ln -s /usr/local/lib/libbz2.so.1.0 /usr/local/lib/libbz2.so.1
+make -j8 install
+cd ../
+
+# Return to `.build/` folder
+cd ../
 
 echo "Copying Source"
 cp -r ../[!.]* ./src
 cp -r ./src/* ./output/aws-sam-cli-src
 
-echo "Removing CI Scripts and other files/direcories not needed"
+echo "Removing CI Scripts and other files/directories not needed"
 rm -vf ./output/aws-sam-cli-src/appveyor*.yml
 rm -rf ./output/aws-sam-cli-src/tests
 rm -rf ./output/aws-sam-cli-src/designs
 rm -rf ./output/aws-sam-cli-src/docs
 rm -rf ./output/aws-sam-cli-src/media
+rm -rf ./output/aws-sam-cli-src/schema
 rm -rf ./output/aws-sam-cli-src/Make.ps1
 rm -rf ./output/aws-sam-cli-src/CODEOWNERS
 rm -rf ./output/aws-sam-cli-src/CODE_OF_CONDUCT.md
@@ -67,9 +107,12 @@ echo "Installing Python"
 curl "https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz" --output python.tgz
 tar -xzf python.tgz
 cd Python-$python_version
-./configure --enable-shared --with-openssl=/opt/openssl --with-openssl-rpath=auto 
+./configure \
+    --enable-shared \
+    --with-openssl=/opt/openssl \
+    --with-openssl-rpath=auto
 make -j8
-make install
+make -j8 install
 ldconfig
 cd ..
 
@@ -83,6 +126,7 @@ cp -r ./venv/lib/python*/site-packages/* ./output/python-libraries
 
 echo "Installing PyInstaller"
 ./venv/bin/pip install -r src/requirements/pyinstaller-build.txt
+./venv/bin/pip check
 
 echo "Building Binary"
 cd src

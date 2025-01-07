@@ -5,9 +5,11 @@ Provides classes that interface with Docker to create, execute and manage contai
 import logging
 import sys
 import threading
+from typing import Union, cast
 
 import docker
 
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.utils.stream_writer import StreamWriter
 from samcli.local.docker import utils
 from samcli.local.docker.container import Container
@@ -35,7 +37,7 @@ class ContainerManager:
 
         self.skip_pull_image = skip_pull_image
         self.docker_network_id = docker_network_id
-        self.docker_client = docker_client or docker.from_env()
+        self.docker_client = docker_client or docker.from_env(version=DOCKER_MIN_API_VERSION)
         self.do_shutdown_event = do_shutdown_event
 
         self._lock = threading.Lock()
@@ -167,16 +169,16 @@ class ContainerManager:
                 raise DockerImagePullFailedException(str(ex)) from ex
 
             # io streams, especially StringIO, work only with unicode strings
-            stream_writer.write("\nFetching {}:{} Docker container image...".format(image_name, tag))
+            stream_writer.write_str("\nFetching {}:{} Docker container image...".format(image_name, tag))
 
             # Each line contains information on progress of the pull. Each line is a JSON string
             for _ in result_itr:
                 # For every line, print a dot to show progress
-                stream_writer.write(".")
+                stream_writer.write_str(".")
                 stream_writer.flush()
 
             # We are done. Go to the next line
-            stream_writer.write("\n")
+            stream_writer.write_str("\n")
 
     def has_image(self, image_name):
         """
@@ -190,6 +192,26 @@ class ContainerManager:
             self.docker_client.images.get(image_name)
             return True
         except docker.errors.ImageNotFound:
+            return False
+
+    def inspect(self, container: str) -> Union[bool, dict]:
+        """
+        Low-level Docker API for inspecting the container state
+
+        Parameters
+        ----------
+        container: str
+            ID of the container
+
+        Returns
+        -------
+        Union[bool, dict]
+            Container inspection state if successful, False otherwise
+        """
+        try:
+            return cast(dict, self.docker_client.api.inspect_container(container))
+        except (docker.errors.APIError, docker.errors.NullResource) as ex:
+            LOG.debug("Failed to call Docker inspect: %s", str(ex))
             return False
 
 

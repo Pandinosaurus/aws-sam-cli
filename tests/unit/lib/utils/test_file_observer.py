@@ -11,6 +11,7 @@ from samcli.lib.providers.provider import LayerVersion
 from samcli.lib.utils.file_observer import (
     FileObserver,
     FileObserverException,
+    broken_pipe_handler,
     calculate_checksum,
     ImageObserver,
     ImageObserverException,
@@ -383,8 +384,8 @@ class FileObserver_on_change(TestCase):
     @patch("samcli.lib.utils.file_observer.calculate_checksum")
     def test_modification_event_got_fired_for_path_got_deleted(self, calculate_checksum_mock, PathMock):
         event = Mock()
-        event.event_type == "deleted"
-        event.src_path = "parent_path1/path1/sub_path"
+        event.event_type = "deleted"
+        event.src_path = "parent_path1/path1"
 
         path_mock = Mock()
         PathMock.return_value = path_mock
@@ -737,21 +738,23 @@ class LambdaFunctionObserver_watch(TestCase):
         lambda_function = Mock()
         lambda_function.packagetype = ZIP
         lambda_function.code_abs_path = "path1"
+        lambda_function.code_real_path = "path2"
         lambda_function.layers = []
         self.lambda_function_observer.watch(lambda_function)
         self.assertEqual(
             self.lambda_function_observer._observed_functions,
             {
-                ZIP: {"path1": [lambda_function]},
+                ZIP: {"path2": [lambda_function]},
                 IMAGE: {},
             },
         )
-        self.file_observer_mock.watch.assert_called_with("path1")
+        self.file_observer_mock.watch.assert_called_with("path2")
 
     def test_watch_ZIP_lambda_function_with_layers(self):
         lambda_function = Mock()
         lambda_function.packagetype = ZIP
         lambda_function.code_abs_path = "path1"
+        lambda_function.code_real_path = "path2"
         layer1_mock = Mock()
         layer1_mock.codeuri = "layer1_path"
         layer2_mock = Mock()
@@ -763,7 +766,7 @@ class LambdaFunctionObserver_watch(TestCase):
             self.lambda_function_observer._observed_functions,
             {
                 ZIP: {
-                    "path1": [lambda_function],
+                    "path2": [lambda_function],
                     "layer1_path": [lambda_function],
                     "layer2_path": [lambda_function],
                 },
@@ -773,7 +776,7 @@ class LambdaFunctionObserver_watch(TestCase):
         self.assertEqual(
             self.file_observer_mock.watch.call_args_list,
             [
-                call("path1"),
+                call("path2"),
                 call("layer1_path"),
                 call("layer2_path"),
             ],
@@ -783,6 +786,7 @@ class LambdaFunctionObserver_watch(TestCase):
         lambda_function = Mock()
         lambda_function.packagetype = ZIP
         lambda_function.code_abs_path = "path1"
+        lambda_function.code_real_path = "path2"
         layer1_mock = LayerVersion(arn="arn", codeuri="layer1_path")
         layer2_mock = LayerVersion(arn="arn2", codeuri=None)
 
@@ -792,7 +796,7 @@ class LambdaFunctionObserver_watch(TestCase):
             self.lambda_function_observer._observed_functions,
             {
                 ZIP: {
-                    "path1": [lambda_function],
+                    "path2": [lambda_function],
                     "layer1_path": [lambda_function],
                 },
                 IMAGE: {},
@@ -801,7 +805,7 @@ class LambdaFunctionObserver_watch(TestCase):
         self.assertEqual(
             self.file_observer_mock.watch.call_args_list,
             [
-                call("path1"),
+                call("path2"),
                 call("layer1_path"),
             ],
         )
@@ -835,12 +839,14 @@ class LambdaFunctionObserver_unwatch(TestCase):
         self.zip_lambda_function1 = Mock()
         self.zip_lambda_function1.packagetype = ZIP
         self.zip_lambda_function1.code_abs_path = "path1"
+        self.zip_lambda_function1.code_real_path = "path1"
         self.zip_lambda_function1.layers = []
         self.lambda_function_observer.watch(self.zip_lambda_function1)
 
         self.zip_lambda_function2 = Mock()
         self.zip_lambda_function2.packagetype = ZIP
         self.zip_lambda_function2.code_abs_path = "path2"
+        self.zip_lambda_function2.code_real_path = "path2"
         layer1_mock = Mock()
         layer1_mock.codeuri = "layer1_path1"
         layer2_mock = Mock()
@@ -851,6 +857,7 @@ class LambdaFunctionObserver_unwatch(TestCase):
         self.zip_lambda_function3 = Mock()
         self.zip_lambda_function3.packagetype = ZIP
         self.zip_lambda_function3.code_abs_path = "path3"
+        self.zip_lambda_function3.code_real_path = "path3"
         self.zip_lambda_function3.layers = [layer1_mock]
         self.lambda_function_observer.watch(self.zip_lambda_function3)
 
@@ -995,12 +1002,14 @@ class LambdaFunctionObserver_on_change(TestCase):
         self.zip_lambda_function1 = Mock()
         self.zip_lambda_function1.packagetype = ZIP
         self.zip_lambda_function1.code_abs_path = "path1"
+        self.zip_lambda_function1.code_real_path = "path1"
         self.zip_lambda_function1.layers = []
         self.lambda_function_observer.watch(self.zip_lambda_function1)
 
         self.zip_lambda_function2 = Mock()
         self.zip_lambda_function2.packagetype = ZIP
         self.zip_lambda_function2.code_abs_path = "path2"
+        self.zip_lambda_function2.code_real_path = "path2"
         layer1_mock = Mock()
         layer1_mock.codeuri = "layer1_path1"
         layer2_mock = Mock()
@@ -1011,6 +1020,7 @@ class LambdaFunctionObserver_on_change(TestCase):
         self.zip_lambda_function3 = Mock()
         self.zip_lambda_function3.packagetype = ZIP
         self.zip_lambda_function3.code_abs_path = "path3"
+        self.zip_lambda_function3.code_real_path = "path3"
         self.zip_lambda_function3.layers = [layer1_mock]
         self.lambda_function_observer.watch(self.zip_lambda_function3)
 
@@ -1070,3 +1080,30 @@ class TestCalculateChecksum(TestCase):
         path_mock.is_file.return_value = False
         dir_checksum_mock.return_value = "1234"
         self.assertEqual(calculate_checksum(path), "1234")
+
+
+class TestBrokenPipeDecorator(TestCase):
+    def setUp(self):
+        self.mock_exception = Exception()
+        setattr(self.mock_exception, "winerror", 109)
+
+    @patch("samcli.lib.utils.file_observer.platform.system")
+    def test_decorator_handle_gracefully(self, system_mock):
+        system_mock.return_value = "Windows"
+
+        @broken_pipe_handler
+        def test_method():
+            raise self.mock_exception
+
+        test_method()
+
+    @patch("samcli.lib.utils.file_observer.platform.system")
+    def test_decorator_raises_exception(self, system_mock):
+        system_mock.return_value = "not windows"
+
+        @broken_pipe_handler
+        def test_method():
+            raise self.mock_exception
+
+        with self.assertRaises(Exception):
+            test_method()

@@ -53,16 +53,6 @@ class LambdaDebugSettings:
         # The value of entrypoint_mapping is a callable instead of DebugSettings
         # so that DebugSetting objects are not always created.
         entrypoint_mapping = {
-            Runtime.java8.value: lambda: DebugSettings(
-                entry,
-                container_env_vars={
-                    "_JAVA_OPTIONS": "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,quiet=y,"
-                    f"address={debug_port} -XX:MaxHeapSize=2834432k -XX:MaxMetaspaceSize=163840k "
-                    "-XX:ReservedCodeCacheSize=81920k -XX:+UseSerialGC -XX:-TieredCompilation "
-                    "-Djava.net.preferIPv4Stack=true -Xshare:off" + " ".join(debug_args_list),
-                    **_container_env_vars,
-                },
-            ),
             Runtime.java8al2.value: lambda: DebugSettings(
                 entry,
                 container_env_vars={
@@ -93,11 +83,21 @@ class LambdaDebugSettings:
                     **_container_env_vars,
                 },
             ),
-            Runtime.dotnetcore31.value: lambda: DebugSettings(
+            Runtime.java21.value: lambda: DebugSettings(
+                entry,
+                container_env_vars={
+                    "_JAVA_OPTIONS": "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,quiet=y,"
+                    f"address=*:{debug_port} -XX:MaxHeapSize=2834432k -XX:+UseSerialGC "
+                    "-XX:+TieredCompilation -XX:TieredStopAtLevel=1 "
+                    "-Djava.net.preferIPv4Stack=true" + " ".join(debug_args_list),
+                    **_container_env_vars,
+                },
+            ),
+            Runtime.dotnet6.value: lambda: DebugSettings(
                 entry + ["/var/runtime/bootstrap"] + debug_args_list,
                 container_env_vars={"_AWS_LAMBDA_DOTNET_DEBUGGING": "1", **_container_env_vars},
             ),
-            Runtime.dotnet6.value: lambda: DebugSettings(
+            Runtime.dotnet8.value: lambda: DebugSettings(
                 entry + ["/var/runtime/bootstrap"] + debug_args_list,
                 container_env_vars={"_AWS_LAMBDA_DOTNET_DEBUGGING": "1", **_container_env_vars},
             ),
@@ -108,34 +108,6 @@ class LambdaDebugSettings:
                     "_AWS_LAMBDA_GO_DELVE_API_VERSION": LambdaDebugSettings.parse_go_delve_api_version(debug_args_list),
                     "_AWS_LAMBDA_GO_DELVE_LISTEN_PORT": debug_port,
                     "_AWS_LAMBDA_GO_DELVE_PATH": options.get("delvePath"),
-                    **_container_env_vars,
-                },
-            ),
-            Runtime.nodejs12x.value: lambda: DebugSettings(
-                entry
-                + ["/var/lang/bin/node"]
-                + debug_args_list
-                + ["--no-lazy", "--expose-gc"]
-                + ["/var/runtime/index.js"],
-                container_env_vars={
-                    "NODE_PATH": "/opt/nodejs/node_modules:/opt/nodejs/node12/node_modules:/var/runtime/node_modules:"
-                    "/var/runtime:/var/task",
-                    "NODE_OPTIONS": f"--inspect-brk=0.0.0.0:{str(debug_port)} --max-http-header-size 81920",
-                    "AWS_EXECUTION_ENV": "AWS_Lambda_nodejs12.x",
-                    **_container_env_vars,
-                },
-            ),
-            Runtime.nodejs14x.value: lambda: DebugSettings(
-                entry
-                + ["/var/lang/bin/node"]
-                + debug_args_list
-                + ["--no-lazy", "--expose-gc"]
-                + ["/var/runtime/index.js"],
-                container_env_vars={
-                    "NODE_PATH": "/opt/nodejs/node_modules:/opt/nodejs/node14/node_modules:/var/runtime/node_modules:"
-                    "/var/runtime:/var/task",
-                    "NODE_OPTIONS": f"--inspect-brk=0.0.0.0:{str(debug_port)} --max-http-header-size 81920",
-                    "AWS_EXECUTION_ENV": "AWS_Lambda_nodejs14.x",
                     **_container_env_vars,
                 },
             ),
@@ -167,9 +139,33 @@ class LambdaDebugSettings:
                     **_container_env_vars,
                 },
             ),
-            Runtime.python37.value: lambda: DebugSettings(
-                entry + ["/var/lang/bin/python3.7"] + debug_args_list + ["/var/runtime/bootstrap"],
-                container_env_vars=_container_env_vars,
+            Runtime.nodejs20x.value: lambda: DebugSettings(
+                entry
+                + ["/var/lang/bin/node"]
+                + debug_args_list
+                + ["--no-lazy", "--expose-gc"]
+                + ["/var/runtime/index.mjs"],
+                container_env_vars={
+                    "NODE_PATH": "/opt/nodejs/node_modules:/opt/nodejs/node20/node_modules:/var/runtime/node_modules:"
+                    "/var/runtime:/var/task",
+                    "NODE_OPTIONS": f"--inspect-brk=0.0.0.0:{str(debug_port)} --max-http-header-size 81920",
+                    "AWS_EXECUTION_ENV": "AWS_Lambda_nodejs20.x",
+                    **_container_env_vars,
+                },
+            ),
+            Runtime.nodejs22x.value: lambda: DebugSettings(
+                entry
+                + ["/var/lang/bin/node"]
+                + debug_args_list
+                + ["--no-lazy", "--expose-gc"]
+                + ["/var/runtime/index.mjs"],
+                container_env_vars={
+                    "NODE_PATH": "/opt/nodejs/node_modules:/opt/nodejs/node22/node_modules:/var/runtime/node_modules:"
+                    "/var/runtime:/var/task",
+                    "NODE_OPTIONS": f"--inspect-brk=0.0.0.0:{str(debug_port)} --max-http-header-size 81920",
+                    "AWS_EXECUTION_ENV": "AWS_Lambda_nodejs22.x",
+                    **_container_env_vars,
+                },
             ),
             Runtime.python38.value: lambda: DebugSettings(
                 entry + ["/var/lang/bin/python3.8"] + debug_args_list + ["/var/runtime/bootstrap.py"],
@@ -181,6 +177,18 @@ class LambdaDebugSettings:
             ),
             Runtime.python310.value: lambda: DebugSettings(
                 entry + ["/var/lang/bin/python3.10"] + debug_args_list + ["/var/runtime/bootstrap.py"],
+                container_env_vars=_container_env_vars,
+            ),
+            Runtime.python311.value: lambda: DebugSettings(
+                entry + ["/var/lang/bin/python3.11"] + debug_args_list + ["/var/runtime/bootstrap.py"],
+                container_env_vars=_container_env_vars,
+            ),
+            Runtime.python312.value: lambda: DebugSettings(
+                entry + ["/var/lang/bin/python3.12"] + debug_args_list + ["/var/runtime/bootstrap.py"],
+                container_env_vars=_container_env_vars,
+            ),
+            Runtime.python313.value: lambda: DebugSettings(
+                entry + ["/var/lang/bin/python3.13"] + debug_args_list + ["/var/runtime/bootstrap.py"],
                 container_env_vars=_container_env_vars,
             ),
         }

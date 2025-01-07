@@ -6,7 +6,7 @@ Resources:
     Properties:
       CodeUri: s3://sam-demo-bucket/todo_list.zip
       Handler: index.restapi
-      Runtime: python3.7
+      Runtime: python3.11
       Events:
         HelloAWSIAMAuth:
           Type: HttpApi
@@ -22,7 +22,7 @@ Resources:
     Properties:
       CodeUri: s3://bucket/key
       Handler: index.handler
-      Runtime: nodejs12.x
+      Runtime: nodejs18.x
 
   MyApi:
     Type: AWS::Serverless::HttpApi

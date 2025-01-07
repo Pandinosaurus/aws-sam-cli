@@ -18,9 +18,11 @@ class TestLocalApiService_start(TestCase):
     def setUp(self):
         self.port = 123
         self.host = "abc"
+        self.ssl_context = None
         self.static_dir = "static"
         self.cwd = "cwd"
         self.template = {"hello": "world"}
+        self.disable_authorizer = False
 
         self.lambda_invoke_context_mock = Mock()
         self.lambda_runner_mock = Mock()
@@ -48,17 +50,23 @@ class TestLocalApiService_start(TestCase):
         ApiGwServiceMock.return_value = self.apigw_service
 
         # Now start the service
-        local_service = LocalApiService(self.lambda_invoke_context_mock, self.port, self.host, self.static_dir)
+        local_service = LocalApiService(
+            self.lambda_invoke_context_mock,
+            self.port,
+            self.host,
+            self.static_dir,
+            self.disable_authorizer,
+            self.ssl_context,
+        )
         local_service.api_provider.api.routes = routing_list
         local_service.start()
 
         # Make sure the right methods are called
         SamApiProviderMock.assert_called_with(
-            self.lambda_invoke_context_mock.stacks,
-            cwd=self.cwd,
+            self.lambda_invoke_context_mock.stacks, cwd=self.cwd, disable_authorizer=self.disable_authorizer
         )
 
-        log_routes_mock.assert_called_with(routing_list, self.host, self.port)
+        log_routes_mock.assert_called_with(routing_list, self.host, self.port, bool(self.ssl_context))
         make_static_dir_mock.assert_called_with(self.cwd, self.static_dir)
         ApiGwServiceMock.assert_called_with(
             api=self.api_provider_mock.api,
@@ -66,6 +74,7 @@ class TestLocalApiService_start(TestCase):
             static_dir=static_dir_path,
             port=self.port,
             host=self.host,
+            ssl_context=self.ssl_context,
             stderr=self.stderr_mock,
         )
 
@@ -88,7 +97,14 @@ class TestLocalApiService_start(TestCase):
         ApiGwServiceMock.return_value = self.apigw_service
 
         # Now start the service
-        local_service = LocalApiService(self.lambda_invoke_context_mock, self.port, self.host, self.static_dir)
+        local_service = LocalApiService(
+            self.lambda_invoke_context_mock,
+            self.port,
+            self.host,
+            self.static_dir,
+            self.disable_authorizer,
+            self.ssl_context,
+        )
         local_service.api_provider.api.routes = routing_list
         with self.assertRaises(NoApisDefined):
             local_service.start()

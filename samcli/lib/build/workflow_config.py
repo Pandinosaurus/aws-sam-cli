@@ -2,22 +2,22 @@
 Contains Builder Workflow Configs for different Runtimes
 """
 
-import os
 import logging
-from typing import Dict, List, Optional, Tuple, Union, cast
+import os
+from typing import Dict, List, Optional, Union, cast
 
 from samcli.lib.build.workflows import (
     CONFIG,
-    PYTHON_PIP_CONFIG,
-    NODEJS_NPM_CONFIG,
-    RUBY_BUNDLER_CONFIG,
+    DOTNET_CLIPACKAGE_CONFIG,
+    GO_MOD_CONFIG,
     JAVA_GRADLE_CONFIG,
     JAVA_KOTLIN_GRADLE_CONFIG,
     JAVA_MAVEN_CONFIG,
-    DOTNET_CLIPACKAGE_CONFIG,
-    GO_MOD_CONFIG,
-    PROVIDED_MAKE_CONFIG,
+    NODEJS_NPM_CONFIG,
     NODEJS_NPM_ESBUILD_CONFIG,
+    PROVIDED_MAKE_CONFIG,
+    PYTHON_PIP_CONFIG,
+    RUBY_BUNDLER_CONFIG,
     RUST_CARGO_LAMBDA_CONFIG,
 )
 from samcli.lib.telemetry.event import EventTracker
@@ -85,23 +85,27 @@ def get_selector(
 
 def get_layer_subfolder(build_workflow: str) -> str:
     subfolders_by_runtime = {
-        "python3.7": "python",
         "python3.8": "python",
         "python3.9": "python",
         "python3.10": "python",
+        "python3.11": "python",
+        "python3.12": "python",
+        "python3.13": "python",
         "nodejs4.3": "nodejs",
         "nodejs6.10": "nodejs",
         "nodejs8.10": "nodejs",
-        "nodejs12.x": "nodejs",
-        "nodejs14.x": "nodejs",
         "nodejs16.x": "nodejs",
         "nodejs18.x": "nodejs",
-        "ruby2.7": "ruby/lib",
-        "java8": "java",
+        "nodejs20.x": "nodejs",
+        "nodejs22.x": "nodejs",
+        "ruby3.2": "ruby/lib",
+        "ruby3.3": "ruby/lib",
         "java11": "java",
         "java8.al2": "java",
         "java17": "java",
+        "java21": "java",
         "dotnet6": "dotnet",
+        "dotnet8": "dotnet",
         # User is responsible for creating subfolder in these workflows
         "makefile": "",
     }
@@ -134,7 +138,7 @@ def get_workflow_config(
 
     specified_workflow str
         Workflow to be used, if directly specified. They are currently scoped to "makefile" and the official runtime
-        identifier names themselves, eg: nodejs14.x. If a workflow is not directly specified,
+        identifier names themselves, eg: nodejs20.x. If a workflow is not directly specified,
         it is calculated by the current method based on the runtime.
 
     Returns
@@ -146,32 +150,28 @@ def get_workflow_config(
     selectors_by_build_method = {
         "makefile": BasicWorkflowSelector(PROVIDED_MAKE_CONFIG),
         "dotnet7": BasicWorkflowSelector(DOTNET_CLIPACKAGE_CONFIG),
+        "dotnet": BasicWorkflowSelector(DOTNET_CLIPACKAGE_CONFIG),
         "rust-cargolambda": BasicWorkflowSelector(RUST_CARGO_LAMBDA_CONFIG),
     }
 
     selectors_by_runtime = {
-        "python3.7": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
         "python3.8": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
         "python3.9": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
         "python3.10": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
-        "nodejs12.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
-        "nodejs14.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
+        "python3.11": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
+        "python3.12": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
+        "python3.13": BasicWorkflowSelector(PYTHON_PIP_CONFIG),
         "nodejs16.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
         "nodejs18.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
-        "ruby2.7": BasicWorkflowSelector(RUBY_BUNDLER_CONFIG),
-        "dotnetcore3.1": BasicWorkflowSelector(DOTNET_CLIPACKAGE_CONFIG),
+        "nodejs20.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
+        "nodejs22.x": BasicWorkflowSelector(NODEJS_NPM_CONFIG),
+        "ruby3.2": BasicWorkflowSelector(RUBY_BUNDLER_CONFIG),
+        "ruby3.3": BasicWorkflowSelector(RUBY_BUNDLER_CONFIG),
         "dotnet6": BasicWorkflowSelector(DOTNET_CLIPACKAGE_CONFIG),
+        "dotnet8": BasicWorkflowSelector(DOTNET_CLIPACKAGE_CONFIG),
         "go1.x": BasicWorkflowSelector(GO_MOD_CONFIG),
         # When Maven builder exists, add to this list so we can automatically choose a builder based on the supported
         # manifest
-        "java8": ManifestWorkflowSelector(
-            [
-                # Gradle builder needs custom executable paths to find `gradlew` binary
-                JAVA_GRADLE_CONFIG._replace(executable_search_paths=[code_dir, project_dir]),
-                JAVA_KOTLIN_GRADLE_CONFIG._replace(executable_search_paths=[code_dir, project_dir]),
-                JAVA_MAVEN_CONFIG,
-            ]
-        ),
         "java11": ManifestWorkflowSelector(
             [
                 # Gradle builder needs custom executable paths to find `gradlew` binary
@@ -196,8 +196,17 @@ def get_workflow_config(
                 JAVA_MAVEN_CONFIG,
             ]
         ),
+        "java21": ManifestWorkflowSelector(
+            [
+                # Gradle builder needs custom executable paths to find `gradlew` binary
+                JAVA_GRADLE_CONFIG._replace(executable_search_paths=[code_dir, project_dir]),
+                JAVA_KOTLIN_GRADLE_CONFIG._replace(executable_search_paths=[code_dir, project_dir]),
+                JAVA_MAVEN_CONFIG,
+            ]
+        ),
         "provided": BasicWorkflowSelector(PROVIDED_MAKE_CONFIG),
         "provided.al2": BasicWorkflowSelector(PROVIDED_MAKE_CONFIG),
+        "provided.al2023": BasicWorkflowSelector(PROVIDED_MAKE_CONFIG),
     }
 
     selectors_by_builder = {
@@ -233,7 +242,7 @@ def get_workflow_config(
         ) from ex
 
 
-def supports_specified_workflow(specified_workflow: str) -> bool:
+def supports_specified_workflow(specified_workflow: Optional[str]) -> bool:
     """
     Given a specified workflow, returns whether it is supported in container builds,
     can be used to overwrite runtime and get docker image or not

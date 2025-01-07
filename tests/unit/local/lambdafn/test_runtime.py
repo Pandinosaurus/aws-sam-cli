@@ -91,6 +91,7 @@ class LambdaRuntime_create(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
         # Run the container and get results
@@ -161,6 +162,7 @@ class LambdaRuntime_create(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
         # Run the container and get results
@@ -224,7 +226,13 @@ class LambdaRuntime_run(TestCase):
         create_mock.return_value = container
 
         self.runtime.run(None, self.func_config, debug_context=debug_options)
-        create_mock.assert_called_with(self.func_config, debug_options, None, None)
+        create_mock.assert_called_with(
+            function_config=self.func_config,
+            debug_context=debug_options,
+            container_host=None,
+            container_host_interface=None,
+            extra_hosts=None,
+        )
         self.manager_mock.run.assert_called_with(container)
 
     def test_must_skip_run_running_container(self):
@@ -310,6 +318,8 @@ class LambdaRuntime_invoke(TestCase):
         self.runtime._configure_interrupt = Mock()
         self.runtime._configure_interrupt.return_value = start_timer
 
+        self.runtime._check_exit_state = Mock()
+
         LambdaContainerMock.return_value = container
         container.is_running.return_value = False
 
@@ -337,6 +347,7 @@ class LambdaRuntime_invoke(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
 
@@ -368,6 +379,9 @@ class LambdaRuntime_invoke(TestCase):
         self.runtime._get_code_dir.return_value = code_dir
         self.runtime._configure_interrupt = Mock()
         self.runtime._configure_interrupt.return_value = start_timer
+        self.runtime._lock = MagicMock()
+
+        self.runtime._check_exit_state = Mock()
 
         LambdaContainerMock.return_value = container
         container.is_running.return_value = False
@@ -404,6 +418,8 @@ class LambdaRuntime_invoke(TestCase):
         self.runtime._get_code_dir.return_value = code_dir
         self.runtime._configure_interrupt = Mock()
         self.runtime._configure_interrupt.return_value = timer
+        self.runtime._check_exit_state = Mock()
+        self.runtime._lock = MagicMock()
 
         LambdaContainerMock.return_value = container
         container.is_running.return_value = False
@@ -437,6 +453,8 @@ class LambdaRuntime_invoke(TestCase):
         self.runtime._get_code_dir = MagicMock()
         self.runtime._get_code_dir.return_value = code_dir
         self.runtime._configure_interrupt = Mock()
+        self.runtime._check_exit_state = Mock()
+        self.runtime._lock = MagicMock()
 
         LambdaContainerMock.return_value = container
         container.is_running.return_value = False
@@ -690,6 +708,7 @@ class TestWarmLambdaRuntime_invoke(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
 
@@ -791,6 +810,7 @@ class TestWarmLambdaRuntime_create(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
 
@@ -837,6 +857,7 @@ class TestWarmLambdaRuntime_create(TestCase):
                     memory_mb=self.DEFAULT_MEMORY,
                     container_host=None,
                     container_host_interface=None,
+                    extra_hosts=None,
                     function_full_path=self.full_path,
                 ),
                 call(
@@ -854,6 +875,7 @@ class TestWarmLambdaRuntime_create(TestCase):
                     memory_mb=self.DEFAULT_MEMORY,
                     container_host=None,
                     container_host_interface=None,
+                    extra_hosts=None,
                     function_full_path=self.full_path,
                 ),
             ]
@@ -925,6 +947,7 @@ class TestWarmLambdaRuntime_create(TestCase):
             memory_mb=self.DEFAULT_MEMORY,
             container_host=None,
             container_host_interface=None,
+            extra_hosts=None,
             function_full_path=self.full_path,
         )
         self.manager_mock.create.assert_called_with(container)
@@ -939,10 +962,11 @@ class TestWarmLambdaRuntime_get_code_dir(TestCase):
     @patch("samcli.local.lambdafn.runtime.os")
     def test_must_return_same_path_if_path_is_not_compressed_file(self, os_mock):
         lambda_image_mock = Mock()
+        observer_mock = Mock()
         os_mock.path.isfile.return_value = False
         code_path = "path"
 
-        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock)
+        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock, observer_mock)
         res = self.runtime._get_code_dir(code_path)
         self.assertEqual(self.runtime._temp_uncompressed_paths_to_be_cleaned, [])
         self.assertEqual(res, code_path)
@@ -951,12 +975,13 @@ class TestWarmLambdaRuntime_get_code_dir(TestCase):
     @patch("samcli.local.lambdafn.runtime.os")
     def test_must_cache_temp_uncompressed_dirs_to_be_cleared_later(self, os_mock, _unzip_file_mock):
         lambda_image_mock = Mock()
+        observer_mock = Mock()
         os_mock.path.isfile.return_value = True
         uncompressed_dir_mock = Mock()
         _unzip_file_mock.return_value = uncompressed_dir_mock
         code_path = "path.zip"
 
-        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock)
+        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock, observer_mock)
         res = self.runtime._get_code_dir(code_path)
         self.assertEqual(self.runtime._temp_uncompressed_paths_to_be_cleaned, [uncompressed_dir_mock])
         self.assertEqual(res, uncompressed_dir_mock)
@@ -966,17 +991,18 @@ class TestWarmLambdaRuntime_clean_warm_containers_related_resources(TestCase):
     def setUp(self):
         self.manager_mock = Mock()
         lambda_image_mock = Mock()
-        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock)
         self.observer_mock = Mock()
+        self.observer_mock.is_alive.return_value = True
+        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock, self.observer_mock)
+
         self.func1_container_mock = Mock()
         self.func2_container_mock = Mock()
         self.runtime._containers = {
             "func_name1": self.func1_container_mock,
             "func_name2": self.func2_container_mock,
         }
-        self.runtime._observer = self.observer_mock
-        self.runtime._observer.is_alive.return_value = True
         self.runtime._temp_uncompressed_paths_to_be_cleaned = ["path1", "path2"]
+        self.runtime._lock = MagicMock()
 
     @patch("samcli.local.lambdafn.runtime.shutil")
     def test_must_container_stopped_when_its_code_dir_got_changed(self, shutil_mock):
@@ -1002,10 +1028,8 @@ class TestWarmLambdaRuntime_on_code_change(TestCase):
     def setUp(self):
         self.manager_mock = Mock()
         lambda_image_mock = Mock()
-        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock)
-
         self.observer_mock = Mock()
-        self.runtime._observer = self.observer_mock
+        self.runtime = WarmLambdaRuntime(self.manager_mock, lambda_image_mock, self.observer_mock)
 
         self.lang = "runtime"
         self.handler = "handler"
@@ -1140,7 +1164,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1168,7 +1192,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1181,7 +1205,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler1",
             None,
             None,
@@ -1196,7 +1220,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             "imageUri",
             None,
@@ -1209,7 +1233,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1224,7 +1248,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             "imageUri",
             None,
@@ -1237,7 +1261,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             "imageUri1",
             None,
@@ -1252,7 +1276,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             "imageUri",
             {"WorkingDirectory": "/opt"},
@@ -1265,7 +1289,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             "imageUri",
             {"WorkingDirectory": "/var"},
@@ -1280,7 +1304,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1293,7 +1317,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1308,7 +1332,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1327,7 +1351,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1347,7 +1371,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1364,7 +1388,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1382,7 +1406,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1398,7 +1422,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1416,7 +1440,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1432,7 +1456,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1450,7 +1474,7 @@ class TestRequireContainerReloading(TestCase):
         func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
@@ -1467,7 +1491,7 @@ class TestRequireContainerReloading(TestCase):
         updated_func = FunctionConfig(
             "name",
             "stack/name",
-            "python3.7",
+            "python3.12",
             "app.handler",
             None,
             None,
