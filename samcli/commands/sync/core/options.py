@@ -1,9 +1,10 @@
 """
 Sync Command Options related Datastructures for formatting.
 """
+
 from typing import Dict, List
 
-from samcli.cli.core.options import ALL_COMMON_OPTIONS, add_common_options_info
+from samcli.cli.core.options import ALL_COMMON_OPTIONS, SAVE_PARAMS_OPTIONS, add_common_options_info
 from samcli.cli.row_modifiers import RowDefinition
 
 # NOTE(sriram-mv): The ordering of the option lists matter, they are the order
@@ -25,9 +26,10 @@ INFRASTRUCTURE_OPTION_NAMES: List[str] = [
     "notification_arns",
     "tags",
     "metadata",
+    "build_image",
 ]
 
-CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"]
+CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"] + SAVE_PARAMS_OPTIONS
 
 ADDITIONAL_OPTIONS: List[str] = [
     "watch",
@@ -38,6 +40,8 @@ ADDITIONAL_OPTIONS: List[str] = [
     "resource_id",
     "resource",
     "base_dir",
+    "build_in_source",
+    "watch_exclude",
 ]
 OTHER_OPTIONS: List[str] = ["debug", "help"]
 

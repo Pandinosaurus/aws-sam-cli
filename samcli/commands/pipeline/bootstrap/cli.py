@@ -1,13 +1,14 @@
 """
 CLI command for "pipeline bootstrap", which sets up the require pipeline infrastructure resources
 """
+
 import os
 from textwrap import dedent
 from typing import Any, Dict, List, Optional
 
 import click
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import aws_creds_options, common_options, pass_context, print_cmdline_args
 from samcli.commands._utils.click_mutex import ClickMutex
 from samcli.commands._utils.command_exception_handler import command_exception_handler
@@ -28,7 +29,7 @@ SHORT_HELP = "Generates the required AWS resources to connect your CI/CD system.
 
 HELP_TEXT = """
 This command generates the required AWS infrastructure resources to connect to your CI/CD system.
-This step must be run for each deployment stage in your pipeline, prior to running the sam pipline init command.
+This step must be run for each deployment stage in your pipeline, prior to running the sam pipeline init command.
 """
 
 PIPELINE_CONFIG_DIR = os.path.join(".aws-sam", "pipeline")
@@ -38,7 +39,7 @@ OPENID_CONNECT = "OpenID Connect (OIDC)"
 
 
 @click.command("bootstrap", short_help=SHORT_HELP, help=HELP_TEXT, context_settings=dict(max_content_width=120))
-@configuration_option(provider=TomlProvider(section="parameters"))
+@configuration_option(provider=ConfigProvider(section="parameters"))
 @click.option(
     "--interactive/--no-interactive",
     is_flag=True,
@@ -174,6 +175,7 @@ OPENID_CONNECT = "OpenID Connect (OIDC)"
 )
 @common_options
 @aws_creds_options
+@save_params_option
 @pass_context
 @track_command
 @check_newer_version
@@ -203,6 +205,7 @@ def cli(
     gitlab_project: Optional[str],
     bitbucket_repo_uuid: Optional[str],
     cicd_provider: Optional[str],
+    save_params: bool,
 ) -> None:
     """
     `sam pipeline bootstrap` command entry point

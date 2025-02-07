@@ -1,17 +1,18 @@
 """
 Handles bundler properties as needed to modify the build process
 """
+
 import logging
 from copy import deepcopy
-from pathlib import Path, PosixPath
+from pathlib import Path
 from typing import Dict, Optional
 
-from samcli.commands.local.lib.exceptions import InvalidHandlerPathError
 from samcli.lib.providers.provider import Stack
 from samcli.lib.providers.sam_function_provider import SamFunctionProvider
 
 LOG = logging.getLogger(__name__)
 
+LAYER_PREFIX = "/opt"
 ESBUILD_PROPERTY = "esbuild"
 
 
@@ -157,6 +158,9 @@ class EsbuildBundlerManager:
         if not handler_filename:
             LOG.debug("Unable to parse handler, continuing without post-processing template.")
             return False
+        if handler_filename.startswith(LAYER_PREFIX):
+            LOG.debug("Skipping updating the handler path as it is pointing to a layer.")
+            return False
         expected_artifact_path = Path(self._build_dir, name, handler_filename)
         return not expected_artifact_path.is_file()
 
@@ -170,7 +174,8 @@ class EsbuildBundlerManager:
         :return: string path to built handler file
         """
         try:
-            path = str(Path(handler).parent / Path(handler).stem) + ".js"
+            path = (Path(handler).parent / Path(handler).stem).as_posix()
+            path = path + ".js"
         except (AttributeError, TypeError):
             return None
         return path

@@ -26,13 +26,13 @@ class TestPackageImage(PackageIntegBase):
     def setUpClass(cls):
         cls.docker_client = docker.from_env()
         cls.local_images = [
-            ("public.ecr.aws/sam/emulation-python3.8", "latest"),
+            ("public.ecr.aws/sam/emulation-python3.9", "latest"),
         ]
         # setup some images locally by pulling them.
         for repo, tag in cls.local_images:
             cls.docker_client.api.pull(repository=repo, tag=tag)
-            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.8", tag="latest")
-            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.8-2", tag="latest")
+            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.9", tag="latest")
+            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.9-2", tag="latest")
             cls.docker_client.api.tag(f"{repo}:{tag}", "colorsrandomfunctionf61b9209", tag="latest")
 
         super(TestPackageImage, cls).setUpClass()
@@ -61,8 +61,9 @@ class TestPackageImage(PackageIntegBase):
             process.kill()
             raise
         process_stderr = stderr.strip()
-
-        self.assertIn("Error: Missing option '--image-repository'", process_stderr.decode("utf-8"))
+        self.assertIn(
+            "Error: Missing option '--image-repositories', '--image-repository'", process_stderr.decode("utf-8")
+        )
         self.assertEqual(2, process.returncode)
 
     @parameterized.expand(
@@ -138,8 +139,8 @@ class TestPackageImage(PackageIntegBase):
         except TimeoutExpired:
             process.kill()
             raise
-
         process_stderr = stderr.strip()
+
         self.assertIn(f"{self.ecr_repo_name}", process_stderr.decode("utf-8"))
         self.assertEqual(0, process.returncode)
 
@@ -189,7 +190,9 @@ class TestPackageImage(PackageIntegBase):
         process_stderr = stderr.strip()
 
         self.assertEqual(2, process.returncode)
-        self.assertIn("Error: Missing option '--image-repository'", process_stderr.decode("utf-8"))
+        self.assertIn(
+            "Error: Missing option '--image-repositories', '--image-repository'", process_stderr.decode("utf-8")
+        )
 
     @parameterized.expand(["aws-serverless-application-image.yaml"])
     def test_package_template_with_image_function_in_nested_application(self, template_file):
@@ -261,10 +264,42 @@ class TestPackageImage(PackageIntegBase):
 
         # verify all function images are pushed
         images = [
-            ("emulation-python3.8", "latest"),
-            ("emulation-python3.8-2", "latest"),
+            ("emulation-python3.9", "latest"),
+            ("emulation-python3.9-2", "latest"),
         ]
         for image, tag in images:
             # check string like this:
             # ...python-ce689abb4f0d-3.9-slim: digest:...
             self.assertRegex(process_stderr, rf"{image}-.+-{tag}: digest:")
+
+    @parameterized.expand(["template-image-load.yaml"])
+    def test_package_with_loadable_image_archive(self, template_file):
+        template_path = self.test_data_path.joinpath(os.path.join("load-image-archive", template_file))
+        command_list = PackageIntegBase.get_command_list(image_repository=self.ecr_repo_name, template=template_path)
+
+        process = Popen(command_list, stderr=PIPE)
+        try:
+            _, stderr = process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+        process_stderr = stderr.strip()
+
+        self.assertEqual(0, process.returncode)
+        self.assertIn(f"{self.ecr_repo_name}", process_stderr.decode("utf-8"))
+
+    @parameterized.expand(["template-image-load-fail.yaml"])
+    def test_package_with_nonloadable_image_archive(self, template_file):
+        template_path = self.test_data_path.joinpath(os.path.join("load-image-archive", template_file))
+        command_list = PackageIntegBase.get_command_list(image_repository=self.ecr_repo_name, template=template_path)
+
+        process = Popen(command_list, stderr=PIPE)
+        try:
+            _, stderr = process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+        process_stderr = stderr.strip()
+
+        self.assertEqual(1, process.returncode)
+        self.assertIn("unexpected EOF", process_stderr.decode("utf-8"))

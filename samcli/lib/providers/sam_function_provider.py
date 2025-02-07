@@ -1,17 +1,21 @@
 """
 Class that provides functions from a given SAM template
 """
+
 import logging
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, cast
 
 from samtranslator.policy_template_processor.exceptions import TemplateNotFoundException
 
 from samcli.commands._utils.template import TemplateFailedParsingException
 from samcli.commands.local.cli_common.user_exceptions import InvalidLayerVersionArn
-from samcli.lib.providers.exceptions import InvalidLayerReference
+from samcli.lib.build.exceptions import MissingFunctionHandlerException
+from samcli.lib.providers.exceptions import InvalidLayerReference, MissingFunctionNameException
 from samcli.lib.utils.colors import Colored, Colors
 from samcli.lib.utils.file_observer import FileObserver
 from samcli.lib.utils.packagetype import IMAGE, ZIP
+from samcli.lib.utils.path_utils import check_path_valid_type
 from samcli.lib.utils.resources import (
     AWS_LAMBDA_FUNCTION,
     AWS_LAMBDA_LAYERVERSION,
@@ -20,7 +24,7 @@ from samcli.lib.utils.resources import (
 )
 
 from ..build.constants import DEPRECATED_RUNTIMES
-from .provider import Function, LayerVersion, Stack
+from .provider import Function, LayerVersion, Stack, get_full_path, get_function_build_info
 from .sam_base_provider import SamBaseProvider
 from .sam_stack_provider import SamLocalStackProvider
 
@@ -115,7 +119,8 @@ class SamFunctionProvider(SamBaseProvider):
         """
 
         if not name:
-            raise ValueError("Function name is required")
+            LOG.debug("Function name is not defined, unable to fetch Lambda function.")
+            raise MissingFunctionNameException()
 
         resolved_function = None
 
@@ -444,12 +449,26 @@ class SamFunctionProvider(SamBaseProvider):
             LOG.debug("--base-dir is not presented, adjusting uri %s relative to %s", codeuri, stack.location)
             codeuri = SamLocalStackProvider.normalize_resource_path(stack.location, codeuri)
 
+        if imageuri and check_path_valid_type(imageuri) and codeuri != ".":
+            normalized_image_uri = SamLocalStackProvider.normalize_resource_path(stack.location, imageuri)
+            if Path(normalized_image_uri).is_file():
+                LOG.debug("--base-dir is not presented, adjusting uri %s relative to %s", codeuri, stack.location)
+                imageuri = normalized_image_uri
+
+        package_type = resource_properties.get("PackageType", ZIP)
+        if package_type == ZIP and not resource_properties.get("Handler"):
+            raise MissingFunctionHandlerException(f"Could not find handler for function: {name}")
+
+        function_build_info = get_function_build_info(
+            get_full_path(stack.stack_path, function_id), package_type, inlinecode, codeuri, imageuri, metadata
+        )
+
         return Function(
             stack_path=stack.stack_path,
             function_id=function_id,
             name=name,
             functionname=resource_properties.get("FunctionName", name),
-            packagetype=resource_properties.get("PackageType", ZIP),
+            packagetype=package_type,
             runtime=resource_properties.get("Runtime"),
             memory=resource_properties.get("MemorySize"),
             timeout=resource_properties.get("Timeout"),
@@ -467,6 +486,8 @@ class SamFunctionProvider(SamBaseProvider):
             architectures=resource_properties.get("Architectures", None),
             function_url_config=resource_properties.get("FunctionUrlConfig"),
             runtime_management_config=resource_properties.get("RuntimeManagementConfig"),
+            function_build_info=function_build_info,
+            logging_config=resource_properties.get("LoggingConfig"),
         )
 
     @staticmethod

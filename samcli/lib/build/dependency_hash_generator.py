@@ -1,6 +1,6 @@
 """Utility Class for Getting Function or Layer Manifest Dependency Hashes"""
-import pathlib
 
+import pathlib
 from typing import Any, Optional
 
 from samcli.lib.build.workflow_config import get_workflow_config

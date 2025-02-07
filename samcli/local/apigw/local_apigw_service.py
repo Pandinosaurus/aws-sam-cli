@@ -4,9 +4,9 @@ import base64
 import json
 import logging
 from datetime import datetime
-from io import BytesIO
+from io import StringIO
 from time import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from flask import Flask, Request, request
 from werkzeug.datastructures import Headers
@@ -15,6 +15,7 @@ from werkzeug.serving import WSGIRequestHandler
 
 from samcli.commands.local.lib.exceptions import UnsupportedInlineCodeError
 from samcli.commands.local.lib.local_lambda import LocalLambdaRunner
+from samcli.lib.providers.exceptions import MissingFunctionNameException
 from samcli.lib.providers.provider import Api, Cors
 from samcli.lib.telemetry.event import EventName, EventTracker, UsedFeature
 from samcli.lib.utils.stream_writer import StreamWriter
@@ -30,6 +31,7 @@ from samcli.local.apigw.exceptions import (
 from samcli.local.apigw.path_converter import PathConverter
 from samcli.local.apigw.route import Route
 from samcli.local.apigw.service_error_responses import ServiceErrorResponses
+from samcli.local.docker.exceptions import DockerContainerCreationFailedException
 from samcli.local.events.api_event import (
     ContextHTTP,
     ContextIdentity,
@@ -66,6 +68,7 @@ class LocalApigwService(BaseLocalService):
         port: Optional[int] = None,
         host: Optional[str] = None,
         stderr: Optional[StreamWriter] = None,
+        ssl_context: Optional[Tuple[str, str]] = None,
     ):
         """
         Creates an ApiGatewayService
@@ -84,10 +87,13 @@ class LocalApigwService(BaseLocalService):
         host : str
             Optional. host to start the service on
             Defaults to '127.0.0.1
+        ssl_context : (str, str)
+            Optional. tuple(str, str) indicating the cert and key files to use to start in https mode
+            Defaults to None
         stderr : samcli.lib.utils.stream_writer.StreamWriter
             Optional stream writer where the stderr from Docker container should be written to
         """
-        super().__init__(lambda_runner.is_debugging(), port=port, host=host)
+        super().__init__(lambda_runner.is_debugging(), port=port, host=host, ssl_context=ssl_context)
         self.api = api
         self.lambda_runner = lambda_runner
         self.static_dir = static_dir
@@ -473,6 +479,7 @@ class LocalApigwService(BaseLocalService):
             stage_name=self.api.stage_name,
             stage_variables=self.api.stage_variables,
             operation_name=route_key,
+            api_type=route.event_type,
         )
 
     def _build_v1_context(self, route: Route) -> Dict[str, Any]:
@@ -589,7 +596,7 @@ class LocalApigwService(BaseLocalService):
 
         return True
 
-    def _invoke_lambda_function(self, lambda_function_name: str, event: dict) -> str:
+    def _invoke_lambda_function(self, lambda_function_name: str, event: dict) -> Union[str, bytes]:
         """
         Helper method to invoke a function and setup stdout+stderr
 
@@ -602,15 +609,17 @@ class LocalApigwService(BaseLocalService):
 
         Returns
         -------
-        str
-            A string containing the output from the Lambda function
+        Union[str, bytes]
+            A string or bytes containing the output from the Lambda function
         """
-        with BytesIO() as stdout:
+        with StringIO() as stdout:
             event_str = json.dumps(event, sort_keys=True)
             stdout_writer = StreamWriter(stdout, auto_flush=True)
 
             self.lambda_runner.invoke(lambda_function_name, event_str, stdout=stdout_writer, stderr=self.stderr)
-            lambda_response, _ = LambdaOutputParser.get_lambda_output(stdout)
+            lambda_response, is_lambda_user_error_response = LambdaOutputParser.get_lambda_output(stdout)
+            if is_lambda_user_error_response:
+                raise LambdaResponseParseException
 
         return lambda_response
 
@@ -639,7 +648,10 @@ class LocalApigwService(BaseLocalService):
         """
 
         route: Route = self._get_current_route(request)
-        cors_headers = Cors.cors_to_headers(self.api.cors)
+
+        request_origin = request.headers.get("Origin")
+        cors_headers = Cors.cors_to_headers(self.api.cors, request_origin, route.event_type)
+
         lambda_authorizer = route.authorizer_object
 
         # payloadFormatVersion can only support 2 values: "1.0" and "2.0"
@@ -669,8 +681,8 @@ class LocalApigwService(BaseLocalService):
             LOG.error("UnicodeDecodeError while processing HTTP request: %s", error)
             return ServiceErrorResponses.lambda_failure_response()
 
+        lambda_authorizer_exception = None
         try:
-            lambda_authorizer_exception = None
             auth_service_error = None
 
             if lambda_authorizer:
@@ -686,7 +698,7 @@ class LocalApigwService(BaseLocalService):
 
             LOG.warning(
                 "Failed to find a Function to invoke a Lambda authorizer, verify that "
-                "this Function exists locally if it is not a remote resource."
+                "this Function is defined and exists locally in the template."
             )
         except Exception as ex:
             # re-raise the catch all exception after we track it in our telemetry
@@ -703,9 +715,14 @@ class LocalApigwService(BaseLocalService):
             )
 
             if lambda_authorizer_exception:
-                LOG.error("Lambda authorizer failed to invoke successfully: %s", exception_name)
+                LOG.error("Lambda authorizer failed to invoke successfully: %s", str(lambda_authorizer_exception))
 
             if auth_service_error:
+                # Return the Flask service error if there is one, since these are the only exceptions
+                # we are anticipating from the authorizer, anything else indicates a local issue.
+                #
+                # Note that returning within a finally block will have the effect of swallowing
+                # any reraised exceptions.
                 return auth_service_error
 
         endpoint_service_error = None
@@ -717,6 +734,14 @@ class LocalApigwService(BaseLocalService):
         except UnsupportedInlineCodeError:
             endpoint_service_error = ServiceErrorResponses.not_implemented_locally(
                 "Inline code is not supported for sam local commands. Please write your code in a separate file."
+            )
+        except LambdaResponseParseException:
+            endpoint_service_error = ServiceErrorResponses.lambda_body_failure_response()
+        except DockerContainerCreationFailedException as ex:
+            endpoint_service_error = ServiceErrorResponses.container_creation_failed(ex.message)
+        except MissingFunctionNameException as ex:
+            endpoint_service_error = ServiceErrorResponses.lambda_failure_response(
+                f"Failed to execute endpoint. Got an invalid function name ({str(ex)})",
             )
 
         if endpoint_service_error:
@@ -736,6 +761,9 @@ class LocalApigwService(BaseLocalService):
         except LambdaResponseParseException as ex:
             LOG.error("Invalid lambda response received: %s", ex)
             return ServiceErrorResponses.lambda_failure_response()
+
+        # Add CORS headers to the response
+        headers.update(cors_headers)
 
         return self.service_response(body, headers, status_code)
 

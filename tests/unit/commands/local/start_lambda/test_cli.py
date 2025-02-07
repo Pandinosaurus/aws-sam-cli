@@ -1,13 +1,13 @@
 from unittest import TestCase
 from unittest.mock import patch, Mock
 
-from parameterized import parameterized
+from parameterized import parameterized, param
 
 from samcli.commands.local.start_lambda.cli import do_cli as start_lambda_cli
 from samcli.lib.providers.exceptions import InvalidLayerReference
 from samcli.commands.local.cli_common.user_exceptions import UserException
 from samcli.commands.validate.lib.exceptions import InvalidSamDocumentException
-from samcli.local.docker.exceptions import ContainerNotStartableException
+from samcli.local.docker.exceptions import ContainerNotStartableException, PortAlreadyInUse
 from samcli.commands.local.lib.exceptions import OverridesNotWellDefinedError, InvalidIntermediateImageError
 from samcli.local.docker.lambda_debug_settings import DebuggingNotSupported
 
@@ -42,6 +42,7 @@ class TestCli(TestCase):
 
         self.container_host = "localhost"
         self.container_host_interface = "127.0.0.1"
+        self.add_host = {}
         self.invoke_image = ()
         self.hook_name = None
 
@@ -81,6 +82,7 @@ class TestCli(TestCase):
             shutdown=self.shutdown,
             container_host=self.container_host,
             container_host_interface=self.container_host_interface,
+            add_host=self.add_host,
             invoke_images={},
         )
 
@@ -133,16 +135,29 @@ class TestCli(TestCase):
         expected = "invalid imageuri"
         self.assertEqual(msg, expected)
 
+    @parameterized.expand(
+        [
+            param(
+                ContainerNotStartableException("no free ports on host to bind with container"),
+                "no free ports on host to bind with container",
+            ),
+            param(
+                PortAlreadyInUse("provided port already in use"),
+                "provided port already in use",
+            ),
+        ]
+    )
     @patch("samcli.commands.local.cli_common.invoke_context.InvokeContext")
-    def test_must_raise_user_exception_on_no_free_ports(self, invoke_context_mock):
-        invoke_context_mock.side_effect = ContainerNotStartableException("no free ports on host to bind with container")
+    def test_must_raise_user_exception_on_no_free_ports(
+        self, side_effect_exception, expected_exception_message, invoke_context_mock
+    ):
+        invoke_context_mock.side_effect = side_effect_exception
 
         with self.assertRaises(UserException) as context:
             self.call_cli()
 
         msg = str(context.exception)
-        expected = "no free ports on host to bind with container"
-        self.assertEqual(msg, expected)
+        self.assertEqual(msg, expected_exception_message)
 
     def call_cli(self):
         start_lambda_cli(
@@ -167,6 +182,7 @@ class TestCli(TestCase):
             shutdown=self.shutdown,
             container_host=self.container_host,
             container_host_interface=self.container_host_interface,
+            add_host=self.add_host,
             invoke_image=self.invoke_image,
             hook_name=self.hook_name,
         )

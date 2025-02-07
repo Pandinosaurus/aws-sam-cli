@@ -1,4 +1,5 @@
 """ Application Environment """
+
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ import boto3
 import click
 import requests
 from botocore.exceptions import ClientError
-from OpenSSL import SSL, crypto  # type: ignore
+from OpenSSL import SSL, crypto
 
 from samcli.commands.pipeline.bootstrap.guided_context import BITBUCKET, GITHUB_ACTIONS, GITLAB, OPEN_ID_CONNECT
 from samcli.commands.pipeline.bootstrap.pipeline_oidc_provider import PipelineOidcProvider
@@ -222,7 +223,7 @@ class Stage:
         # If we attempt to get the cert chain without exchanging some traffic it will be empty
         c.sendall(str.encode("HEAD / HTTP/1.0\n\n"))
         peerCertChain = c.get_peer_cert_chain()
-        cert = peerCertChain[-1]
+        cert = peerCertChain[-1]  # type: ignore
 
         # Dump the certificate in DER/ASN1 format so that its SHA1 hash can be computed
         dumped_cert = crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
@@ -240,13 +241,17 @@ class Stage:
                 [] if self.pipeline_user.is_user_provided or self.use_oidc_provider else [self.pipeline_user.comment],
                 [] if not self.use_oidc_provider else [self.oidc_provider.comment],
                 [] if self.pipeline_execution_role.is_user_provided else [self.pipeline_execution_role.comment],
-                []
-                if self.cloudformation_execution_role.is_user_provided
-                else [self.cloudformation_execution_role.comment],
+                (
+                    []
+                    if self.cloudformation_execution_role.is_user_provided
+                    else [self.cloudformation_execution_role.comment]
+                ),
                 [] if self.artifacts_bucket.is_user_provided else [self.artifacts_bucket.comment],
-                []
-                if self.image_repository.is_user_provided or not self.create_image_repository
-                else [self.image_repository.comment],
+                (
+                    []
+                    if self.image_repository.is_user_provided or not self.create_image_repository
+                    else [self.image_repository.comment]
+                ),
             ]
         )
         return "\n".join([f"\t- {comment}" for comment in resource_comments])

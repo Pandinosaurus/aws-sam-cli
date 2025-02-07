@@ -1,5 +1,5 @@
 {
-    "dotnetcore3.1": [
+    "dotnet6": [
         {
             "directory": "template/cookiecutter-aws-sam-hello-dotnet",
             "displayName": "Hello World Example",
@@ -37,24 +37,6 @@
             "useCaseName": "Hello World Example"
         }
     ],
-    "java8": [
-        {
-            "directory": "template/cookiecutter-aws-sam-hello-java-gradle",
-            "displayName": "Hello World Example: Gradle",
-            "dependencyManager": "gradle",
-            "appTemplate": "hello-world",
-            "packageType": "Zip",
-            "useCaseName": "Hello World Example"
-        },
-        {
-            "directory": "template/cookiecutter-aws-sam-hello-java-gradle",
-            "displayName": "Hello World Example: Maven",
-            "dependencyManager": "maven",
-            "appTemplate": "hello-world",
-            "packageType": "Zip",
-            "useCaseName": "Hello World Example"
-        }
-    ],
     "java8.al2": [
         {
             "directory": "template/cookiecutter-aws-sam-hello-java-gradle",
@@ -73,7 +55,7 @@
             "useCaseName": "Hello World Example"
         }
     ],
-    "nodejs14.x": [
+    "nodejs22.x": [
         {
             "directory": "template/cookiecutter-aws-sam-hello-nodejs",
             "displayName": "Hello World Example",
@@ -83,7 +65,27 @@
             "useCaseName": "Hello World Example"
         }
     ],
-    "nodejs12.x": [
+    "nodejs20.x": [
+        {
+            "directory": "template/cookiecutter-aws-sam-hello-nodejs",
+            "displayName": "Hello World Example",
+            "dependencyManager": "npm",
+            "appTemplate": "hello-world",
+            "packageType": "Zip",
+            "useCaseName": "Hello World Example"
+        }
+    ],
+    "nodejs18.x": [
+        {
+            "directory": "template/cookiecutter-aws-sam-hello-nodejs",
+            "displayName": "Hello World Example",
+            "dependencyManager": "npm",
+            "appTemplate": "hello-world",
+            "packageType": "Zip",
+            "useCaseName": "Hello World Example"
+        }
+    ],
+    "nodejs16.x": [
         {
             "directory": "template/cookiecutter-aws-sam-hello-nodejs",
             "displayName": "Hello World Example",
@@ -108,26 +110,6 @@
             "directory": "template/cookiecutter-aws-sam-hello-python",
             "displayName": "Hello World Example",
             "dependencyManager": "pip",
-            "appTemplate": "hello-world",
-            "packageType": "Zip",
-            "useCaseName": "Hello World Example"
-        }
-    ],
-    "python3.7": [
-        {
-            "directory": "template/cookiecutter-aws-sam-hello-python",
-            "displayName": "Hello World Example",
-            "dependencyManager": "pip",
-            "appTemplate": "hello-world",
-            "packageType": "Zip",
-            "useCaseName": "Hello World Example"
-        }
-    ],
-    "ruby2.7": [
-        {
-            "directory": "template/cookiecutter-aws-sam-hello-ruby",
-            "displayName": "Hello World Example",
-            "dependencyManager": "bundler",
             "appTemplate": "hello-world",
             "packageType": "Zip",
             "useCaseName": "Hello World Example"
