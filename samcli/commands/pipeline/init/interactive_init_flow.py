@@ -2,6 +2,7 @@
 Interactive flow that prompts that users for pipeline template (cookiecutter template) and used it to generate
 pipeline configuration file
 """
+
 import json
 import logging
 import os
@@ -256,7 +257,7 @@ class InteractiveInitFlow:
                 continue
             click.echo(
                 Colored().yellow(
-                    "2 stage(s) were detected, matching the template requirements. "
+                    f"{number_of_stages} stage(s) were detected, matching the template requirements. "
                     "If these are incorrect, delete .aws-sam/pipeline/pipelineconfig.toml and rerun"
                 )
             )

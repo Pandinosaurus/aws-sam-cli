@@ -1,8 +1,10 @@
 """
 Generates a Docker Image to be used for invoking a function locally
 """
+
 import hashlib
 import logging
+import os
 import platform
 import re
 import sys
@@ -18,6 +20,7 @@ from samcli.commands.local.cli_common.user_exceptions import (
     ImageBuildException,
 )
 from samcli.commands.local.lib.exceptions import InvalidIntermediateImageError
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.utils.architecture import has_runtime_multi_arch_image
 from samcli.lib.utils.packagetype import IMAGE, ZIP
 from samcli.lib.utils.stream_writer import StreamWriter
@@ -28,26 +31,32 @@ LOG = logging.getLogger(__name__)
 
 RAPID_IMAGE_TAG_PREFIX = "rapid"
 
+TEST_RUNTIMES: list[str] = []
+
 
 class Runtime(Enum):
-    nodejs12x = "nodejs12.x"
-    nodejs14x = "nodejs14.x"
     nodejs16x = "nodejs16.x"
     nodejs18x = "nodejs18.x"
-    python37 = "python3.7"
+    nodejs20x = "nodejs20.x"
+    nodejs22x = "nodejs22.x"
     python38 = "python3.8"
     python39 = "python3.9"
     python310 = "python3.10"
-    ruby27 = "ruby2.7"
-    java8 = "java8"
+    python311 = "python3.11"
+    python312 = "python3.12"
+    python313 = "python3.13"
+    ruby32 = "ruby3.2"
+    ruby33 = "ruby3.3"
     java8al2 = "java8.al2"
     java11 = "java11"
     java17 = "java17"
+    java21 = "java21"
     go1x = "go1.x"
-    dotnetcore31 = "dotnetcore3.1"
     dotnet6 = "dotnet6"
+    dotnet8 = "dotnet8"
     provided = "provided"
     providedal2 = "provided.al2"
+    providedal2023 = "provided.al2023"
 
     @classmethod
     def has_value(cls, value):
@@ -60,7 +69,7 @@ class Runtime(Enum):
         return any(value == item.value for item in cls)
 
     @classmethod
-    def get_image_name_tag(cls, runtime: str, architecture: str) -> str:
+    def get_image_name_tag(cls, runtime: str, architecture: str, is_preview: bool = False) -> str:
         """
         Returns the image name and tag for a particular runtime
 
@@ -70,11 +79,13 @@ class Runtime(Enum):
             AWS Lambda runtime
         architecture : str
             Architecture for the runtime
+        is_preview : bool
+            Flag to use preview tag
 
         Returns
         -------
         str
-            Image name and tag for the runtime's base image, like `python:3.7` or `provided:al2`
+            Image name and tag for the runtime's base image, like `python:3.12` or `provided:al2`
         """
         runtime_image_tag = ""
         if runtime == cls.provided.value:
@@ -84,13 +95,16 @@ class Runtime(Enum):
             # `provided.al2` becomes `provided:al2``
             runtime_image_tag = runtime.replace(".", ":")
         elif runtime.startswith("dotnet"):
-            # dotnetcore3.1 becomes dotnet:core3.1 and dotnet6 becomes dotnet:6
+            # dotnet6 becomes dotnet:6
             runtime_image_tag = runtime.replace("dotnet", "dotnet:")
         else:
             # This fits most runtimes format: `nameN.M` becomes `name:N.M` (python3.9 -> python:3.9)
             runtime_image_tag = re.sub(r"^([a-z]+)([0-9][a-z0-9\.]*)$", r"\1:\2", runtime)
-            # nodejs14.x, go1.x, etc don't have the `.x` part.
+            # nodejs20.x, go1.x, etc don't have the `.x` part.
             runtime_image_tag = runtime_image_tag.replace(".x", "")
+
+        if is_preview:
+            runtime_image_tag = f"{runtime_image_tag}-preview"
 
         # Runtime image tags contain the architecture only if more than one is supported for that runtime
         if has_runtime_multi_arch_image(runtime):
@@ -122,7 +136,7 @@ class LambdaImage:
         self.layer_downloader = layer_downloader
         self.skip_pull_image = skip_pull_image
         self.force_image_build = force_image_build
-        self.docker_client = docker_client or docker.from_env()
+        self.docker_client = docker_client or docker.from_env(version=DOCKER_MIN_API_VERSION)
         self.invoke_images = invoke_images
 
     def build(self, runtime, packagetype, image, layers, architecture, stream=None, function_name=None):
@@ -157,14 +171,20 @@ class LambdaImage:
         if packagetype == IMAGE:
             base_image = image
         elif packagetype == ZIP:
-            runtime_image_tag = Runtime.get_image_name_tag(runtime, architecture)
+            is_preview = runtime in TEST_RUNTIMES
+            runtime_image_tag = Runtime.get_image_name_tag(runtime, architecture, is_preview=is_preview)
             if self.invoke_images:
                 base_image = self.invoke_images.get(function_name, self.invoke_images.get(None))
             if not base_image:
-                # Gets the ECR image format like `python:3.7` or `nodejs:16-x86_64`
+                # Gets the ECR image format like `python:3.12` or `nodejs:16-x86_64`
                 runtime_only_number = re.split("[:-]", runtime_image_tag)[1]
                 tag_prefix = f"{runtime_only_number}-"
                 base_image = f"{self._INVOKE_REPO_PREFIX}/{runtime_image_tag}"
+
+                # Temporarily add a version tag to the emulation image so that we don't pull a broken image
+                if platform.system().lower() == "windows" and runtime in [Runtime.go1x.value]:
+                    LOG.info("Falling back to a previous version of the emulation image")
+                    base_image = f"{base_image}.2023.08.02.10"
 
         if not base_image:
             raise InvalidIntermediateImageError(f"Invalid PackageType, PackageType needs to be one of [{ZIP}, {IMAGE}]")
@@ -208,7 +228,7 @@ class LambdaImage:
                 )
                 image_not_found = True
             else:
-                raise DockerDistributionAPIError("Unknown API error received from docker") from e
+                raise DockerDistributionAPIError(str(e)) from e
 
         # If building a new rapid image, delete older rapid images
         if image_not_found and rapid_image == f"{image_repo}:{tag_prefix}{RAPID_IMAGE_TAG_PREFIX}-{architecture}":
@@ -225,7 +245,7 @@ class LambdaImage:
             or not runtime
         ):
             stream_writer = stream or StreamWriter(sys.stderr)
-            stream_writer.write("Building image...")
+            stream_writer.write_str("Building image...")
             stream_writer.flush()
             self._build_image(
                 image if image else base_image, rapid_image, downloaded_layers, architecture, stream=stream_writer
@@ -252,7 +272,7 @@ class LambdaImage:
             List of the layers
 
         runtime_image_tag str
-            Runtime version format to generate image name and tag (including architecture, e.g. "python:3.7-x86_64")
+            Runtime version format to generate image name and tag (including architecture, e.g. "python:3.12-x86_64")
 
         Returns
         -------
@@ -324,7 +344,7 @@ class LambdaImage:
             # Set only on Windows, unix systems will preserve the host permission into the tarball
             tar_filter = set_item_permission if platform.system().lower() == "windows" else None
 
-            with create_tarball(tar_paths, tar_filter=tar_filter) as tarballfile:
+            with create_tarball(tar_paths, tar_filter=tar_filter, dereference=True) as tarballfile:
                 try:
                     resp_stream = self.docker_client.api.build(
                         fileobj=tarballfile,
@@ -336,15 +356,15 @@ class LambdaImage:
                         platform=get_docker_platform(architecture),
                     )
                     for log in resp_stream:
-                        stream_writer.write(".")
+                        stream_writer.write_str(".")
                         stream_writer.flush()
                         if "error" in log:
-                            stream_writer.write("\n")
+                            stream_writer.write_str(os.linesep)
                             LOG.exception("Failed to build Docker Image")
                             raise ImageBuildException("Error building docker image: {}".format(log["error"]))
-                    stream_writer.write("\n")
+                    stream_writer.write_str(os.linesep)
                 except (docker.errors.BuildError, docker.errors.APIError) as ex:
-                    stream_writer.write("\n")
+                    stream_writer.write_str(os.linesep)
                     LOG.exception("Failed to build Docker Image")
                     raise ImageBuildException("Building Image failed.") from ex
         finally:
@@ -524,8 +544,8 @@ class LambdaImage:
             Image digest, including `sha256:` prefix
         """
         image_info = self.docker_client.images.get(image_name)
-        full_digest: str = image_info.attrs.get("RepoDigests", [None])[0]
         try:
+            full_digest: str = image_info.attrs.get("RepoDigests", [None])[0]
             return full_digest.split("@")[1]
         except (AttributeError, IndexError):
             return None

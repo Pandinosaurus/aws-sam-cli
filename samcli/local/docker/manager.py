@@ -5,12 +5,14 @@ Provides classes that interface with Docker to create, execute and manage contai
 import logging
 import sys
 import threading
+from typing import Union, cast
 
 import docker
 
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.utils.stream_writer import StreamWriter
 from samcli.local.docker import utils
-from samcli.local.docker.container import Container
+from samcli.local.docker.container import Container, ContainerContext
 from samcli.local.docker.lambda_image import LambdaImage
 
 LOG = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ class ContainerManager:
 
         self.skip_pull_image = skip_pull_image
         self.docker_network_id = docker_network_id
-        self.docker_client = docker_client or docker.from_env()
+        self.docker_client = docker_client or docker.from_env(version=DOCKER_MIN_API_VERSION)
         self.do_shutdown_event = do_shutdown_event
 
         self._lock = threading.Lock()
@@ -53,7 +55,7 @@ class ContainerManager:
         """
         return utils.is_docker_reachable(self.docker_client)
 
-    def create(self, container):
+    def create(self, container, context):
         """
         Create a container based on the given configuration.
 
@@ -61,6 +63,8 @@ class ContainerManager:
         ----------
         container samcli.local.docker.container.Container:
             Container to be created
+        context: samcli.local.docker.container.ContainerContext
+            Context for the container management to run. (build, invoke)
 
         Raises
         ------
@@ -91,9 +95,9 @@ class ContainerManager:
                 LOG.info("Failed to download a new %s image. Invoking with the already downloaded image.", image_name)
 
         container.network_id = self.docker_network_id
-        container.create()
+        container.create(context)
 
-    def run(self, container, input_data=None):
+    def run(self, container, context: ContainerContext, input_data=None):
         """
         Run a Docker container based on the given configuration.
         If the container is not created, it will call Create method to create.
@@ -102,6 +106,8 @@ class ContainerManager:
         ----------
         container: samcli.local.docker.container.Container
             Container to create and run
+        context: samcli.local.docker.container.ContainerContext
+            Context for the container management to run. (build, invoke)
         input_data: str, optional
             Input data sent to the container through container's stdin.
 
@@ -111,8 +117,7 @@ class ContainerManager:
             If the Docker image was not available in the server
         """
         if not container.is_created():
-            self.create(container)
-
+            self.create(container, context)
         container.start(input_data=input_data)
 
     def stop(self, container: Container) -> None:
@@ -167,16 +172,16 @@ class ContainerManager:
                 raise DockerImagePullFailedException(str(ex)) from ex
 
             # io streams, especially StringIO, work only with unicode strings
-            stream_writer.write("\nFetching {}:{} Docker container image...".format(image_name, tag))
+            stream_writer.write_str("\nFetching {}:{} Docker container image...".format(image_name, tag))
 
             # Each line contains information on progress of the pull. Each line is a JSON string
             for _ in result_itr:
                 # For every line, print a dot to show progress
-                stream_writer.write(".")
+                stream_writer.write_str(".")
                 stream_writer.flush()
 
             # We are done. Go to the next line
-            stream_writer.write("\n")
+            stream_writer.write_str("\n")
 
     def has_image(self, image_name):
         """
@@ -190,6 +195,26 @@ class ContainerManager:
             self.docker_client.images.get(image_name)
             return True
         except docker.errors.ImageNotFound:
+            return False
+
+    def inspect(self, container: str) -> Union[bool, dict]:
+        """
+        Low-level Docker API for inspecting the container state
+
+        Parameters
+        ----------
+        container: str
+            ID of the container
+
+        Returns
+        -------
+        Union[bool, dict]
+            Container inspection state if successful, False otherwise
+        """
+        try:
+            return cast(dict, self.docker_client.api.inspect_container(container))
+        except (docker.errors.APIError, docker.errors.NullResource) as ex:
+            LOG.debug("Failed to call Docker inspect: %s", str(ex))
             return False
 
 

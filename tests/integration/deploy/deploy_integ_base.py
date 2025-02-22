@@ -2,11 +2,13 @@ import shutil
 import tempfile
 from pathlib import Path
 from enum import Enum, auto
+from typing import Optional
 
 import boto3
 from botocore.config import Config
 
 from samcli.lib.bootstrap.bootstrap import SAM_CLI_STACK_NAME
+from samcli.lib.config.samconfig import SamConfig
 from tests.integration.package.package_integ_base import PackageIntegBase
 from tests.testing_utils import get_sam_command, run_command, run_command_with_input
 
@@ -26,12 +28,11 @@ class DeployIntegBase(PackageIntegBase):
             ResourceType.IAM_ROLE: list(),
         }
         # make temp directory and move all test files into there for each test run
-        original_test_data_path = self.test_data_path
         self.test_data_path = Path(tempfile.mkdtemp())
 
         # copytree call below fails if root folder present, delete it first
         shutil.rmtree(self.test_data_path, ignore_errors=True)
-        shutil.copytree(original_test_data_path, self.test_data_path)
+        shutil.copytree(self.original_test_data_path, self.test_data_path)
 
         self.cfn_client = boto3.client("cloudformation")
         self.ecr_client = boto3.client("ecr")
@@ -212,3 +213,26 @@ class DeployIntegBase(PackageIntegBase):
             command_list = command_list + ["--build-dir", str(build_dir)]
 
         return command_list
+
+    def _assert_deploy_samconfig_parameters(
+        self,
+        config: SamConfig,
+        stack_name: str = SAM_CLI_STACK_NAME,
+        resolve_s3: bool = True,
+        region: str = "us-east-1",
+        capabilities: str = "CAPABILITY_IAM",
+        confirm_changeset: Optional[bool] = None,
+        parameter_overrides: Optional[str] = None,
+    ):
+        params = config.document["default"]["deploy"]["parameters"]
+
+        self.assertEqual(params["stack_name"], stack_name)
+        self.assertEqual(params["resolve_s3"], resolve_s3)
+        self.assertEqual(params["region"], region)
+        self.assertEqual(params["capabilities"], capabilities)
+
+        if confirm_changeset is not None:
+            self.assertEqual(params["confirm_changeset"], confirm_changeset)
+
+        if parameter_overrides is not None:
+            self.assertEqual(params["parameter_overrides"], parameter_overrides)

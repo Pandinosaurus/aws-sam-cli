@@ -20,9 +20,12 @@ from samcli.commands._utils.options import (
     artifact_callback,
     resolve_s3_callback,
     image_repositories_callback,
+    remote_invoke_boto_parameter_callback,
     _space_separated_list_func_type,
     skip_prepare_infra_callback,
     generate_next_command_recommendation,
+    terraform_project_root_path_callback,
+    watch_exclude_option_callback,
 )
 from samcli.commands._utils.parameterized_option import parameterized_option
 from samcli.commands.package.exceptions import PackageResolveS3AndS3SetError, PackageResolveS3AndS3NotSetError
@@ -133,6 +136,26 @@ class TestImageRepositoriesCallBack(TestCase):
                 ctx=MockContext(info_name="test", parent=None, params=mock_params), param=MagicMock(), provided_value=()
             ),
             None,
+        )
+
+
+class TestRemoteInvokeBotoParameterCallBack(TestCase):
+    def test_remote_invoke_boto_parameter_callback(self):
+        mock_params = MagicMock()
+        result = remote_invoke_boto_parameter_callback(
+            ctx=MockContext(info_name="test", parent=None, params=mock_params),
+            param=MagicMock(),
+            provided_value=({"a": "b"}, {"c": "d"}),
+        )
+        self.assertEqual(result, {"a": "b", "c": "d"})
+
+    def test_remote_invoke_boto_parameter_callback_empty(self):
+        mock_params = MagicMock()
+        self.assertEqual(
+            remote_invoke_boto_parameter_callback(
+                ctx=MockContext(info_name="test", parent=None, params=mock_params), param=MagicMock(), provided_value=()
+            ),
+            {},
         )
 
 
@@ -528,6 +551,37 @@ class TestSkipPrepareInfraOption(TestCase):
         self.assertEqual(str(ex.exception), "Missing option --hook-name")
 
 
+class TestTerraformProjectRootPathOption(TestCase):
+    @parameterized.expand(
+        [
+            ({}, {"hook_name": "test"}, True),
+            ({"hook_name": "test"}, {}, True),
+            ({"terraform_project_root_path": "/path/path"}, {"hook_name": "test"}, False),
+            ({"terraform_project_root_path": "/path/path", "hook_name": "test"}, {}, False),
+        ]
+    )
+    def test_project_root_with_hook_package(self, default_map, params, provided_value):
+        ctx_mock = Mock()
+        ctx_mock.default_map = default_map
+        ctx_mock.params = params
+
+        terraform_project_root_path_callback(ctx_mock, Mock(), provided_value)
+
+    def test_project_root_without_hook_package(self):
+        ctx_mock = Mock()
+        ctx_mock.command = Mock()
+        ctx_mock.default_map = {}
+        ctx_mock.params = {}
+
+        param_mock = Mock()
+        param_mock.name = "test"
+
+        with self.assertRaises(click.BadOptionUsage) as ex:
+            terraform_project_root_path_callback(ctx_mock, param_mock, True)
+
+        self.assertEqual(str(ex.exception), "Missing option --hook-name")
+
+
 class TestNextCommandSuggestions(TestCase):
     def test_generate_next_command_recommendation(self):
         listOfTuples = [
@@ -544,3 +598,18 @@ Commands you can use next
 [*] Deploy: sam deploy --guided
 """
         self.assertEqual(output, expectedOutput)
+
+
+class TestWatchExcludeOption(TestCase):
+    @parameterized.expand(
+        [
+            (
+                ({"hello": ["world"]}, {"hello": ["mars"]}, {"foo": ["bar"]}),
+                {"hello": ["world", "mars"], "foo": ["bar"]},
+            ),
+            ((), {}),
+        ]
+    )
+    def test_merging_values(self, input, expected):
+        results = watch_exclude_option_callback(Mock(), Mock(), input)
+        self.assertEqual(results, expected)

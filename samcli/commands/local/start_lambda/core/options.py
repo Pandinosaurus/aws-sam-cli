@@ -1,9 +1,10 @@
 """
 Invoke Start Lambda Command Options related Datastructures for formatting.
 """
+
 from typing import Dict, List
 
-from samcli.cli.core.options import ALL_COMMON_OPTIONS, add_common_options_info
+from samcli.cli.core.options import ALL_COMMON_OPTIONS, SAVE_PARAMS_OPTIONS, add_common_options_info
 from samcli.cli.row_modifiers import RowDefinition
 
 # NOTE(sriram-mv): The ordering of the option lists matter, they are the order
@@ -34,7 +35,9 @@ CONTAINER_OPTION_NAMES: List[str] = [
     "shutdown",
     "container_host",
     "container_host_interface",
+    "add_host",
     "invoke_image",
+    "no_memory_limit",
 ]
 
 ARTIFACT_LOCATION_OPTIONS: List[str] = [
@@ -44,7 +47,9 @@ ARTIFACT_LOCATION_OPTIONS: List[str] = [
 
 EXTENSION_OPTIONS: List[str] = ["hook_name", "skip_prepare_infra"]
 
-CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"]
+CONFIGURATION_OPTION_NAMES: List[str] = ["config_env", "config_file"] + SAVE_PARAMS_OPTIONS
+
+TERRAFORM_HOOK_OPTIONS: List[str] = ["terraform_plan_file"]
 
 ALL_OPTIONS: List[str] = (
     REQUIRED_OPTIONS
@@ -55,6 +60,7 @@ ALL_OPTIONS: List[str] = (
     + EXTENSION_OPTIONS
     + CONFIGURATION_OPTION_NAMES
     + ALL_COMMON_OPTIONS
+    + TERRAFORM_HOOK_OPTIONS
 )
 
 OPTIONS_INFO: Dict[str, Dict] = {
@@ -78,6 +84,7 @@ OPTIONS_INFO: Dict[str, Dict] = {
             ),
         ],
     },
+    "Terraform Hook Options": {"option_names": {opt: {"rank": idx} for idx, opt in enumerate(TERRAFORM_HOOK_OPTIONS)}},
 }
 
 add_common_options_info(OPTIONS_INFO)

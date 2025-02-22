@@ -51,6 +51,7 @@ class TestDeployCliCommand(TestCase):
         self.resolve_image_repos = False
         self.disable_rollback = False
         self.on_failure = None
+        self.max_wait_duration = 480
         MOCK_SAM_CONFIG.reset_mock()
 
         self.companion_stack_manager_patch = patch("samcli.commands.deploy.guided_context.CompanionStackManager")
@@ -64,7 +65,7 @@ class TestDeployCliCommand(TestCase):
     def tearDown(self):
         self.companion_stack_manager_patch.stop()
 
-    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})
+    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})  # type: ignore
     @patch("samcli.commands.package.command.click")
     @patch("samcli.commands.package.package_context.PackageContext")
     @patch("samcli.commands.deploy.command.click")
@@ -103,6 +104,7 @@ class TestDeployCliCommand(TestCase):
             resolve_image_repos=self.resolve_image_repos,
             disable_rollback=self.disable_rollback,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         mock_deploy_context.assert_called_with(
@@ -130,6 +132,7 @@ class TestDeployCliCommand(TestCase):
             disable_rollback=self.disable_rollback,
             poll_delay=os.getenv("SAM_CLI_POLL_DELAY"),
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         context_mock.run.assert_called_with()
@@ -219,6 +222,7 @@ class TestDeployCliCommand(TestCase):
                     resolve_image_repos=self.resolve_image_repos,
                     disable_rollback=self.disable_rollback,
                     on_failure=self.on_failure,
+                    max_wait_duration=self.max_wait_duration,
                 )
 
     @patch("samcli.commands.package.command.click")
@@ -320,6 +324,7 @@ class TestDeployCliCommand(TestCase):
                 resolve_image_repos=self.resolve_image_repos,
                 disable_rollback=self.disable_rollback,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             mock_deploy_context.assert_called_with(
@@ -347,6 +352,7 @@ class TestDeployCliCommand(TestCase):
                 disable_rollback=True,
                 poll_delay=5,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             context_mock.run.assert_called_with()
@@ -464,6 +470,7 @@ class TestDeployCliCommand(TestCase):
                 resolve_image_repos=self.resolve_image_repos,
                 disable_rollback=self.disable_rollback,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             mock_deploy_context.assert_called_with(
@@ -491,6 +498,7 @@ class TestDeployCliCommand(TestCase):
                 disable_rollback=True,
                 poll_delay=5,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             context_mock.run.assert_called_with()
@@ -611,6 +619,7 @@ class TestDeployCliCommand(TestCase):
             resolve_image_repos=self.resolve_image_repos,
             disable_rollback=self.disable_rollback,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         mock_deploy_context.assert_called_with(
@@ -642,6 +651,7 @@ class TestDeployCliCommand(TestCase):
             disable_rollback=True,
             poll_delay=5,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         context_mock.run.assert_called_with()
@@ -769,6 +779,7 @@ class TestDeployCliCommand(TestCase):
             resolve_image_repos=self.resolve_image_repos,
             disable_rollback=self.disable_rollback,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         mock_deploy_context.assert_called_with(
@@ -796,6 +807,7 @@ class TestDeployCliCommand(TestCase):
             disable_rollback=True,
             poll_delay=5,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         context_mock.run.assert_called_with()
@@ -907,6 +919,7 @@ class TestDeployCliCommand(TestCase):
                 resolve_image_repos=self.resolve_image_repos,
                 disable_rollback=self.disable_rollback,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             mock_deploy_context.assert_called_with(
@@ -934,6 +947,7 @@ class TestDeployCliCommand(TestCase):
                 disable_rollback=self.disable_rollback,
                 poll_delay=5,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
             context_mock.run.assert_called_with()
@@ -983,6 +997,7 @@ class TestDeployCliCommand(TestCase):
             resolve_image_repos=self.resolve_image_repos,
             disable_rollback=self.disable_rollback,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         mock_deploy_context.assert_called_with(
@@ -1010,6 +1025,7 @@ class TestDeployCliCommand(TestCase):
             disable_rollback=self.disable_rollback,
             poll_delay=5,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         context_mock.run.assert_called_with()
@@ -1047,6 +1063,7 @@ class TestDeployCliCommand(TestCase):
                 resolve_image_repos=self.resolve_image_repos,
                 disable_rollback=self.disable_rollback,
                 on_failure=self.on_failure,
+                max_wait_duration=self.max_wait_duration,
             )
 
     @patch("samcli.commands.package.command.click")
@@ -1098,6 +1115,7 @@ class TestDeployCliCommand(TestCase):
             resolve_image_repos=True,
             disable_rollback=self.disable_rollback,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
         )
 
         mock_deploy_context.assert_called_with(
@@ -1125,6 +1143,101 @@ class TestDeployCliCommand(TestCase):
             disable_rollback=self.disable_rollback,
             poll_delay=5,
             on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
+        )
+
+        context_mock.run.assert_called_with()
+        self.assertEqual(context_mock.run.call_count, 1)
+
+    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})  # type: ignore
+    @patch("samcli.commands.package.command.click")
+    @patch("samcli.commands.package.package_context.PackageContext")
+    @patch("samcli.commands.deploy.command.click")
+    @patch("samcli.commands.deploy.deploy_context.DeployContext")
+    def test_passing_parameter_overrides_to_context(
+        self, mock_deploy_context, mock_deploy_click, mock_package_context, mock_package_click
+    ):
+        context_mock = Mock()
+        mock_deploy_context.return_value.__enter__.return_value = context_mock
+
+        do_cli(
+            template_file=self.template_file,
+            stack_name=self.stack_name,
+            s3_bucket=self.s3_bucket,
+            image_repository=self.image_repository,
+            image_repositories=None,
+            force_upload=self.force_upload,
+            no_progressbar=self.no_progressbar,
+            s3_prefix=self.s3_prefix,
+            kms_key_id=self.kms_key_id,
+            parameter_overrides=self.parameter_overrides,
+            capabilities=self.capabilities,
+            no_execute_changeset=self.no_execute_changeset,
+            role_arn=self.role_arn,
+            notification_arns=self.notification_arns,
+            fail_on_empty_changeset=self.fail_on_empty_changset,
+            tags=self.tags,
+            region=self.region,
+            profile=self.profile,
+            use_json=self.use_json,
+            metadata=self.metadata,
+            guided=self.guided,
+            confirm_changeset=self.confirm_changeset,
+            signing_profiles=self.signing_profiles,
+            resolve_s3=self.resolve_s3,
+            config_env=self.config_env,
+            config_file=self.config_file,
+            resolve_image_repos=self.resolve_image_repos,
+            disable_rollback=self.disable_rollback,
+            on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
+        )
+
+        mock_deploy_context.assert_called_with(
+            template_file=ANY,
+            stack_name=self.stack_name,
+            s3_bucket=self.s3_bucket,
+            image_repository=self.image_repository,
+            image_repositories=None,
+            force_upload=self.force_upload,
+            no_progressbar=self.no_progressbar,
+            s3_prefix=self.s3_prefix,
+            kms_key_id=self.kms_key_id,
+            parameter_overrides=self.parameter_overrides,
+            capabilities=self.capabilities,
+            no_execute_changeset=self.no_execute_changeset,
+            role_arn=self.role_arn,
+            notification_arns=self.notification_arns,
+            fail_on_empty_changeset=self.fail_on_empty_changset,
+            tags=self.tags,
+            region=self.region,
+            profile=self.profile,
+            confirm_changeset=self.confirm_changeset,
+            signing_profiles=self.signing_profiles,
+            use_changeset=self.use_changeset,
+            disable_rollback=self.disable_rollback,
+            poll_delay=os.getenv("SAM_CLI_POLL_DELAY"),
+            on_failure=self.on_failure,
+            max_wait_duration=self.max_wait_duration,
+        )
+
+        mock_package_context.assert_called_with(
+            template_file=ANY,
+            s3_bucket=self.s3_bucket,
+            s3_prefix=self.s3_prefix,
+            image_repository=self.image_repository,
+            image_repositories=None,
+            output_template_file=ANY,
+            kms_key_id=self.kms_key_id,
+            use_json=self.use_json,
+            force_upload=self.force_upload,
+            no_progressbar=self.no_progressbar,
+            metadata=self.metadata,
+            on_deploy=True,
+            region=self.region,
+            profile=self.profile,
+            signing_profiles=self.signing_profiles,
+            parameter_overrides=self.parameter_overrides,
         )
 
         context_mock.run.assert_called_with()

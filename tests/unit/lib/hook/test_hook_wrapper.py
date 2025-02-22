@@ -1,4 +1,5 @@
 """Test Hook Warpper"""
+
 from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch, Mock
@@ -156,7 +157,16 @@ class TestIacHookWrapper(TestCase):
                 },
             },
         }
-        actual = hook_wrapper.prepare("path/to/output_dir", "path/to/iac_project", True, "my_profile", "us-east-1")
+        actual = hook_wrapper.prepare(
+            "path/to/output_dir",
+            "path/to/iac_project",
+            True,
+            "my_profile",
+            "us-east-1",
+            False,
+            "path/plan/file",
+            "path/to/project",
+        )
         execute_mock.assert_called_once_with(
             "prepare",
             {
@@ -166,6 +176,8 @@ class TestIacHookWrapper(TestCase):
                 "Profile": "my_profile",
                 "Region": "us-east-1",
                 "SkipPrepareInfra": False,
+                "PlanFile": "path/plan/file",
+                "ProjectRootDir": "path/to/project",
             },
         )
         self.assertEqual(actual, "path/to/metadata")

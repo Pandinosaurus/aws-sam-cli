@@ -1,6 +1,7 @@
 """
 Base Command Options related Data Structures for formatting.
 """
+
 from typing import Dict, List
 
 # The ordering of the option lists matter, they are the order in which options will be displayed.
@@ -9,6 +10,8 @@ BETA_OPTIONS: List[str] = ["beta_features"]
 OTHER_OPTIONS: List[str] = ["debug", "help"]
 
 ALL_COMMON_OPTIONS: List[str] = BETA_OPTIONS + OTHER_OPTIONS
+
+SAVE_PARAMS_OPTIONS: List[str] = ["save_params"]
 
 OPTIONS_INFO: Dict[str, Dict] = {
     "Beta Options": {"option_names": {opt: {"rank": idx} for idx, opt in enumerate(BETA_OPTIONS)}},

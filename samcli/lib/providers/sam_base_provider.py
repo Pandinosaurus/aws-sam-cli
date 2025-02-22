@@ -145,7 +145,7 @@ class SamBaseProvider:
         return cast(Optional[str], resource_properties.get(code_property_key, dict()).get("ImageUri", None))
 
     @staticmethod
-    def _extract_sam_function_imageuri(resource_properties: Dict, code_property_key: str) -> Optional[str]:
+    def _extract_sam_function_imageuri(resource_properties: Dict[str, str], code_property_key: str) -> Optional[str]:
         """
         Extracts the Serverless Function ImageUri from the Resource Properties
 
@@ -161,10 +161,12 @@ class SamBaseProvider:
         str
             Representing the local imageuri
         """
-        return resource_properties.get(code_property_key, None)
+        return resource_properties.get(code_property_key)
 
     @staticmethod
-    def get_template(template_dict: Dict, parameter_overrides: Optional[Dict[str, str]] = None) -> Dict:
+    def get_template(
+        template_dict: Dict, parameter_overrides: Optional[Dict[str, str]] = None, use_sam_transform: bool = True
+    ) -> Dict:
         """
         Given a SAM template dictionary, return a cleaned copy of the template where SAM plugins have been run
         and parameter values have been substituted.
@@ -177,6 +179,9 @@ class SamBaseProvider:
         parameter_overrides: dict
             Optional dictionary of values for template parameters
 
+        use_sam_transform: bool
+            Whether to transform the given template with Serverless Application Model. Default is True
+
         Returns
         -------
         dict
@@ -184,7 +189,7 @@ class SamBaseProvider:
         """
         template_dict = template_dict or {}
         parameters_values = SamBaseProvider._get_parameter_values(template_dict, parameter_overrides)
-        if template_dict:
+        if template_dict and use_sam_transform:
             template_dict = SamTranslatorWrapper(template_dict, parameter_values=parameters_values).run_plugins()
         ResourceMetadataNormalizer.normalize(template_dict)
 
