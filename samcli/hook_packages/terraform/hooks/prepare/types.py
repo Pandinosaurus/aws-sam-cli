@@ -1,4 +1,5 @@
 """ Contains the data types used in the TF prepare hook"""
+
 from abc import ABC
 from copy import deepcopy
 from dataclasses import dataclass
@@ -86,6 +87,12 @@ class LinkingPairCaller(NamedTuple):
     source: str
     dest: str
     linking_func: Callable[[Dict[str, TFResource], Dict[str, List], Dict[str, Dict]], None]
+
+
+class LinkingMultipleDestinationsOptionsCaller(NamedTuple):
+    source: str
+    destinations: List[str]
+    linking_func: Callable[[Dict[str, TFResource], Dict[str, List], Dict[str, Dict[str, Dict]]], None]
 
 
 class ResourceTranslationValidator:

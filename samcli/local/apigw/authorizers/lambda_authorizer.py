@@ -1,11 +1,12 @@
 """
 Custom Lambda Authorizer class definition
 """
+
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from json import JSONDecodeError, loads
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, Union, cast
 from urllib.parse import parse_qsl
 
 from samcli.commands.local.lib.validators.identity_source_validator import IdentitySourceValidator
@@ -321,13 +322,13 @@ class LambdaAuthorizer(Authorizer):
 
                     break
 
-    def is_valid_response(self, response: str, method_arn: str) -> bool:
+    def is_valid_response(self, response: Union[str, bytes], method_arn: str) -> bool:
         """
         Validates whether a Lambda authorizer request is authenticated or not.
 
         Parameters
         ----------
-        response: str
+        response: Union[str, bytes]
             JSON string containing the output from a Lambda authorizer
         method_arn: str
             The method ARN of the route that invoked the Lambda authorizer
@@ -355,7 +356,7 @@ class LambdaAuthorizer(Authorizer):
 
     def _is_resource_authorized(self, response: dict, method_arn: str) -> bool:
         """
-        Validate the if the current method ARN is actually authorized
+        Validate if the current method ARN is actually authorized
 
         Parameters
         ----------
@@ -387,7 +388,7 @@ class LambdaAuthorizer(Authorizer):
 
             for resource_arn in resource_list:
                 # form a regular expression from the possible wildcard resource ARN
-                regex_method_arn = resource_arn.replace("*", ".+").replace("?", ".")
+                regex_method_arn = resource_arn.replace("*", ".*").replace("?", ".")
                 regex_method_arn += "$"
 
                 if re.match(regex_method_arn, method_arn):
@@ -416,15 +417,15 @@ class LambdaAuthorizer(Authorizer):
                 f"Authorizer {self.authorizer_name} is missing or contains an invalid " f"{_SIMPLE_RESPONSE_IS_AUTH}"
             )
 
-        return is_authorized
+        return cast(bool, is_authorized)
 
-    def get_context(self, response: str) -> Dict[str, Any]:
+    def get_context(self, response: Union[str, bytes]) -> Dict[str, Any]:
         """
         Returns the context (if set) from the authorizer response and appends the principalId to it.
 
         Parameters
         ----------
-        response: str
+        response: Union[str, bytes]
             Output from Lambda authorizer
 
         Returns

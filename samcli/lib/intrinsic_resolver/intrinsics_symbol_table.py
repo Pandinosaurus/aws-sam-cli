@@ -1,6 +1,7 @@
 """
 The symbol table that is used in IntrinsicResolver in order to resolve runtime attributes
 """
+
 import logging
 import os
 
@@ -81,6 +82,8 @@ class IntrinsicsSymbolTable:
     CFN_RESOURCE_PROPERTIES = "Properties"
     CFN_LAMBDA_FUNCTION_NAME = "FunctionName"
 
+    COMMA_DELIMITED_LIST = "CommaDelimitedList"
+
     def __init__(
         self, template=None, logical_id_translator=None, default_type_resolver=None, common_attribute_resolver=None
     ):
@@ -157,14 +160,23 @@ class IntrinsicsSymbolTable:
     def get_default_attribute_resolver(self):
         return {"Ref": lambda logical_id: logical_id, "Arn": self.arn_resolver}
 
-    @staticmethod
-    def get_default_type_resolver():
+    def handle_function_alias_type(self, logical_id):
+        node = self._resources.get(logical_id).get("Properties").get("FunctionName")
+
+        function_id = self.resolve_symbols(node.get("Ref"), IntrinsicResolver.REF)
+        functionArn = self.arn_resolver(function_id)
+        return functionArn
+
+    def get_default_type_resolver(self):
         return {
             "AWS::ApiGateway::RestApi": {
                 "RootResourceId": "/"  # It usually used as a reference to the parent id of the RestApi,
             },
             "AWS::Lambda::LayerVersion": {
                 IntrinsicResolver.REF: lambda logical_id: {IntrinsicResolver.REF: logical_id}
+            },
+            "AWS::Lambda::Alias": {
+                IntrinsicResolver.REF: self.handle_function_alias_type,
             },
             "AWS::Serverless::LayerVersion": {
                 IntrinsicResolver.REF: lambda logical_id: {IntrinsicResolver.REF: logical_id}
@@ -323,6 +335,16 @@ class IntrinsicsSymbolTable:
         if any(isinstance(logical_id_item, object_type) for object_type in [str, list, bool, int]):
             if resource_attributes not in (IntrinsicResolver.REF, ""):
                 return None
+            parameter_info = self._parameters.get(logical_id)
+            if (
+                parameter_info
+                and parameter_info.get(IntrinsicsSymbolTable.CFN_RESOURCE_TYPE)
+                == IntrinsicsSymbolTable.COMMA_DELIMITED_LIST
+                and isinstance(logical_id_item, str)
+            ):
+                # If the reference is a comma-delimited list represented as a string,
+                # return the reference as a list of items instead
+                return [item.strip() for item in logical_id_item.split(",")]
             return logical_id_item
 
         return logical_id_item.get(resource_attributes)

@@ -26,7 +26,7 @@ class TestAuthUtils(TestCase):
                                         [
                                             ("CodeUri", "HelloWorldFunction"),
                                             ("Handler", "app.lambda_handler"),
-                                            ("Runtime", "python3.7"),
+                                            ("Runtime", "python3.12"),
                                             (
                                                 "Events",
                                                 OrderedDict(
@@ -85,6 +85,35 @@ class TestAuthUtils(TestCase):
         self.template_dict["Resources"]["HelloWorldFunction"]["Properties"]["Events"]["HelloWorld"]["Properties"][
             "RestApiId"
         ] = {"Ref": "HelloWorldApi"}
+        _auth_per_resource = auth_per_resource([Stack("", "", "", {}, self.template_dict)])
+        self.assertEqual(_auth_per_resource, [("HelloWorldFunction", True)])
+
+    def test_auth_per_resource_on_non_serverless_restapi(self):
+        self.template_dict["Resources"]["HelloWorldApi"] = OrderedDict(
+            [
+                ("Type", "AWS::ApiGateway::RestApi"),
+                ("Properties", OrderedDict([("StageName", "Prod")])),
+            ]
+        )
+        # setup the lambda function with a restapiId which has Auth defined.
+        self.template_dict["Resources"]["HelloWorldFunction"]["Properties"]["Events"]["HelloWorld"]["Properties"][
+            "RestApiId"
+        ] = {"Ref": "HelloWorldApi"}
+        self.template_dict["Resources"]["HelloWorldFunction"]["Properties"]["Events"]["HelloWorld"]["Type"] = "Api"
+        _auth_per_resource = auth_per_resource([Stack("", "", "", {}, self.template_dict)])
+        self.assertEqual(_auth_per_resource, [("HelloWorldFunction", True)])
+
+    def test_auth_per_resource_on_non_serverless_httpapi(self):
+        self.template_dict["Resources"]["HelloWorldApi"] = OrderedDict(
+            [
+                ("Type", "AWS::ApiGatewayV2::Api"),
+            ]
+        )
+        # setup the lambda function with a restapiId which has Auth defined.
+        self.template_dict["Resources"]["HelloWorldFunction"]["Properties"]["Events"]["HelloWorld"]["Properties"][
+            "ApiId"
+        ] = {"Ref": "HelloWorldApi"}
+        self.template_dict["Resources"]["HelloWorldFunction"]["Properties"]["Events"]["HelloWorld"]["Type"] = "HttpApi"
         _auth_per_resource = auth_per_resource([Stack("", "", "", {}, self.template_dict)])
         self.assertEqual(_auth_per_resource, [("HelloWorldFunction", True)])
 
@@ -168,6 +197,7 @@ class TestAuthUtils(TestCase):
                                     OrderedDict(
                                         [
                                             ("FunctionUrlConfig", OrderedDict([("AuthType", "NONE")])),
+                                            ("Handler", "FakeHandler"),
                                         ]
                                     ),
                                 ),
@@ -207,6 +237,7 @@ class TestAuthUtils(TestCase):
                             "Events",
                             OrderedDict(events),
                         ),
+                        ("Handler", "FakeHandler"),
                     ]
                 ),
             ),

@@ -10,9 +10,9 @@ from botocore.exceptions import ClientError
 from parameterized import parameterized
 
 from samcli.lib.bootstrap.bootstrap import SAM_CLI_STACK_NAME
-from samcli.lib.config.samconfig import DEFAULT_CONFIG_FILE_NAME
+from samcli.lib.config.samconfig import DEFAULT_CONFIG_FILE_NAME, SamConfig
 from tests.integration.deploy.deploy_integ_base import DeployIntegBase
-from tests.testing_utils import RUNNING_ON_CI, RUNNING_TEST_FOR_MASTER_ON_CI, RUN_BY_CANARY
+from tests.testing_utils import RUNNING_ON_CI, RUNNING_TEST_FOR_MASTER_ON_CI, RUN_BY_CANARY, UpdatableSARTemplate
 
 # Deploy tests require credentials and CI/CD will only add credentials to the env if the PR is from the same repo.
 # This is to restrict package tests to run outside of CI/CD, when the branch is not master or tests are not run by Canary
@@ -26,13 +26,13 @@ class TestDeploy(DeployIntegBase):
     def setUpClass(cls):
         cls.docker_client = docker.from_env()
         cls.local_images = [
-            ("public.ecr.aws/sam/emulation-python3.8", "latest"),
+            ("public.ecr.aws/sam/emulation-python3.9", "latest"),
         ]
         # setup some images locally by pulling them.
         for repo, tag in cls.local_images:
             cls.docker_client.api.pull(repository=repo, tag=tag)
-            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.8", tag="latest")
-            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.8-2", tag="latest")
+            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.9", tag="latest")
+            cls.docker_client.api.tag(f"{repo}:{tag}", "emulation-python3.9-2", tag="latest")
             cls.docker_client.api.tag(f"{repo}:{tag}", "colorsrandomfunctionf61b9209", tag="latest")
 
         # setup signing profile arn & name
@@ -133,6 +133,60 @@ class TestDeploy(DeployIntegBase):
 
         deploy_process_execute = self.run_command(deploy_command_list)
         self.assertEqual(deploy_process_execute.process.returncode, 0)
+
+    @parameterized.expand(["template-image-load.yaml"])
+    def test_deploy_directly_from_image_archive(self, template_file):
+        template_path = self.test_data_path.joinpath(os.path.join("load-image-archive", template_file))
+
+        stack_name = self._method_to_stack_name(self.id())
+        self.stacks.append({"name": stack_name})
+
+        # Package and Deploy in one go without confirming change set.
+        deploy_command_list = self.get_deploy_command_list(
+            template_file=template_path,
+            stack_name=stack_name,
+            capabilities="CAPABILITY_IAM",
+            s3_prefix=self.s3_prefix,
+            s3_bucket=self.s3_bucket.name,
+            image_repository=self.ecr_repo_name,
+            force_upload=True,
+            notification_arns=self.sns_arn,
+            parameter_overrides="Parameter=Clarity",
+            kms_key_id=self.kms_key,
+            no_execute_changeset=False,
+            tags="integ=true clarity=yes foo_bar=baz",
+            confirm_changeset=False,
+        )
+
+        deploy_process_execute = self.run_command(deploy_command_list)
+        self.assertEqual(deploy_process_execute.process.returncode, 0)
+
+    @parameterized.expand(["template-image-load-fail.yaml"])
+    def test_deploy_directly_from_image_archive_but_error_fail(self, template_file):
+        template_path = self.test_data_path.joinpath(os.path.join("load-image-archive", template_file))
+
+        stack_name = self._method_to_stack_name(self.id())
+        self.stacks.append({"name": stack_name})
+
+        # Package and Deploy in one go without confirming change set.
+        deploy_command_list = self.get_deploy_command_list(
+            template_file=template_path,
+            stack_name=stack_name,
+            capabilities="CAPABILITY_IAM",
+            s3_prefix=self.s3_prefix,
+            s3_bucket=self.s3_bucket.name,
+            image_repository=self.ecr_repo_name,
+            force_upload=True,
+            notification_arns=self.sns_arn,
+            parameter_overrides="Parameter=Clarity",
+            kms_key_id=self.kms_key,
+            no_execute_changeset=False,
+            tags="integ=true clarity=yes foo_bar=baz",
+            confirm_changeset=False,
+        )
+
+        deploy_process_execute = self.run_command(deploy_command_list)
+        self.assertEqual(deploy_process_execute.process.returncode, 1)
 
     @parameterized.expand(
         [
@@ -356,6 +410,39 @@ class TestDeploy(DeployIntegBase):
             tags="integ=true clarity=yes foo_bar=baz",
             confirm_changeset=False,
         )
+
+        deploy_process_execute = self.run_command(deploy_command_list)
+        # Error asking for s3 bucket
+        self.assertEqual(deploy_process_execute.process.returncode, 1)
+        self.assertIn(
+            bytes(
+                f"S3 Bucket not specified, use --s3-bucket to specify a bucket name, or use --resolve-s3 \
+to create a managed default bucket, or run sam deploy --guided",
+                encoding="utf-8",
+            ),
+            deploy_process_execute.stderr,
+        )
+
+    def test_deploy_with_no_resolve_s3_option(self):
+        template_path = self.test_data_path.joinpath("aws-serverless-function.yaml")
+
+        stack_name = self._method_to_stack_name(self.id())
+
+        deploy_command_list = self.get_deploy_command_list(
+            template_file=template_path,
+            stack_name=stack_name,
+            capabilities="CAPABILITY_IAM",
+            s3_prefix=self.s3_prefix,
+            force_upload=True,
+            notification_arns=self.sns_arn,
+            parameter_overrides="Parameter=Clarity",
+            kms_key_id=self.kms_key,
+            no_execute_changeset=False,
+            tags="integ=true clarity=yes foo_bar=baz",
+            confirm_changeset=False,
+        )
+
+        deploy_command_list.append("--no-resolve-s3")
 
         deploy_process_execute = self.run_command(deploy_command_list)
         # Error asking for s3 bucket
@@ -613,6 +700,13 @@ to create a managed default bucket, or run sam deploy --guided",
         # Deploy should succeed with a managed stack
         self.assertEqual(deploy_process_execute.process.returncode, 0)
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        deploy_config_params = config.document["default"]["deploy"]["parameters"]
+        self.assertEqual(deploy_config_params["stack_name"], stack_name)
+        self.assertTrue(deploy_config_params["resolve_s3"])
+        self.assertEqual(deploy_config_params["region"], "us-east-1")
+        self.assertEqual(deploy_config_params["capabilities"], "CAPABILITY_IAM")
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -627,7 +721,7 @@ to create a managed default bucket, or run sam deploy --guided",
         deploy_command_list = self.get_deploy_command_list(template_file=template_path, guided=True)
 
         deploy_process_execute = self.run_command_with_input(
-            deploy_command_list, f"{stack_name}\n\n\n\n\ny\n\n\ny\n\n\n\n".encode()
+            deploy_command_list, f"{stack_name}\n\n\n\n\ny\n\n\n\n\n\n\n".encode()
         )
 
         # Deploy should succeed with a managed stack
@@ -637,6 +731,10 @@ to create a managed default bucket, or run sam deploy --guided",
         companion_stack_name = self._stack_name_to_companion_stack(stack_name)
         self._assert_companion_stack(self.cfn_client, companion_stack_name)
         self._assert_companion_stack_content(self.ecr_client, companion_stack_name)
+
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(config, stack_name=stack_name)
 
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
@@ -669,6 +767,9 @@ to create a managed default bucket, or run sam deploy --guided",
             self.fail("Companion stack was created. This should not happen with specifying image repos.")
 
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(config, stack_name=stack_name)
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -690,6 +791,11 @@ to create a managed default bucket, or run sam deploy --guided",
         # Deploy should succeed with a managed stack
         self.assertEqual(deploy_process_execute.process.returncode, 0)
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(
+            config, stack_name=stack_name, parameter_overrides='Parameter="SuppliedParameter"'
+        )
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -710,6 +816,14 @@ to create a managed default bucket, or run sam deploy --guided",
         # Deploy should succeed with a managed stack
         self.assertEqual(deploy_process_execute.process.returncode, 0)
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(
+            config,
+            stack_name=stack_name,
+            capabilities="CAPABILITY_IAM CAPABILITY_NAMED_IAM",
+            parameter_overrides='Parameter="SuppliedParameter"',
+        )
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -731,6 +845,11 @@ to create a managed default bucket, or run sam deploy --guided",
         # Deploy should succeed with a managed stack
         self.assertEqual(deploy_process_execute.process.returncode, 0)
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(
+            config, stack_name=stack_name, parameter_overrides='Parameter="SuppliedParameter"'
+        )
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -752,6 +871,11 @@ to create a managed default bucket, or run sam deploy --guided",
         # Deploy should succeed with a managed stack
         self.assertEqual(deploy_process_execute.process.returncode, 0)
         self.stacks.append({"name": SAM_CLI_STACK_NAME})
+        # Verify the contents in samconfig
+        config = SamConfig(self.test_data_path)
+        self._assert_deploy_samconfig_parameters(
+            config, stack_name=stack_name, confirm_changeset=True, parameter_overrides='Parameter="SuppliedParameter"'
+        )
         # Remove samconfig.toml
         os.remove(self.test_data_path.joinpath(DEFAULT_CONFIG_FILE_NAME))
 
@@ -789,7 +913,11 @@ to create a managed default bucket, or run sam deploy --guided",
 
         deploy_process_execute = self.run_command(deploy_command_list)
         self.assertEqual(deploy_process_execute.process.returncode, 1)
-        self.assertIn("Error reading configuration: Unexpected character", str(deploy_process_execute.stderr))
+        self.assertIn(
+            "Unexpected character: 'm' at line 2 col 11",
+            str(deploy_process_execute.stderr),
+            "Should notify user of the parsing error.",
+        )
 
     @parameterized.expand([("aws-serverless-function.yaml", "samconfig-tags-list.toml")])
     def test_deploy_with_valid_config_tags_list(self, template_file, config_file):
@@ -888,25 +1016,28 @@ to create a managed default bucket, or run sam deploy --guided",
         ]
     )
     def test_deploy_sar_with_location_from_map(self, template_file, region, will_succeed):
-        template_path = Path(__file__).resolve().parents[1].joinpath("testdata", "buildcmd", template_file)
-        stack_name = self._method_to_stack_name(self.id())
-        self.stacks.append({"name": stack_name, "region": region})
+        with UpdatableSARTemplate(
+            Path(__file__).resolve().parents[1].joinpath("testdata", "buildcmd", template_file)
+        ) as sar_app:
+            template_path = sar_app.updated_template_path
+            stack_name = self._method_to_stack_name(self.id())
+            self.stacks.append({"name": stack_name, "region": region})
 
-        # The default region (us-east-1) has no entry in the map
-        deploy_command_list = self.get_deploy_command_list(
-            template_file=template_path,
-            s3_prefix=self.s3_prefix,
-            stack_name=stack_name,
-            capabilities_list=["CAPABILITY_IAM", "CAPABILITY_AUTO_EXPAND"],
-            region=region,  # the !FindInMap has an entry for use-east-2 region only
-        )
-        deploy_process_execute = self.run_command(deploy_command_list)
+            # The default region (us-east-1) has no entry in the map
+            deploy_command_list = self.get_deploy_command_list(
+                template_file=template_path,
+                s3_prefix=self.s3_prefix,
+                stack_name=stack_name,
+                capabilities_list=["CAPABILITY_IAM", "CAPABILITY_AUTO_EXPAND"],
+                region=region,  # the !FindInMap has an entry for use-east-2 region only
+            )
+            deploy_process_execute = self.run_command(deploy_command_list)
 
-        if will_succeed:
-            self.assertEqual(deploy_process_execute.process.returncode, 0)
-        else:
-            self.assertEqual(deploy_process_execute.process.returncode, 1)
-            self.assertIn("Property \\'ApplicationId\\' cannot be resolved.", str(deploy_process_execute.stderr))
+            if will_succeed:
+                self.assertEqual(deploy_process_execute.process.returncode, 0)
+            else:
+                self.assertEqual(deploy_process_execute.process.returncode, 1)
+                self.assertIn("Property \\'ApplicationId\\' cannot be resolved.", str(deploy_process_execute.stderr))
 
     @parameterized.expand(
         [
@@ -915,23 +1046,26 @@ to create a managed default bucket, or run sam deploy --guided",
         ]
     )
     def test_deploy_guided_sar_with_location_from_map(self, template_file, region, will_succeed):
-        template_path = Path(__file__).resolve().parents[1].joinpath("testdata", "buildcmd", template_file)
-        stack_name = self._method_to_stack_name(self.id())
-        self.stacks.append({"name": stack_name, "region": region})
+        with UpdatableSARTemplate(
+            Path(__file__).resolve().parents[1].joinpath("testdata", "buildcmd", template_file)
+        ) as sar_app:
+            template_path = sar_app.updated_template_path
+            stack_name = self._method_to_stack_name(self.id())
+            self.stacks.append({"name": stack_name, "region": region})
 
-        # Package and Deploy in one go without confirming change set.
-        deploy_command_list = self.get_deploy_command_list(template_file=template_path, guided=True)
+            # Package and Deploy in one go without confirming change set.
+            deploy_command_list = self.get_deploy_command_list(template_file=template_path, guided=True)
 
-        deploy_process_execute = self.run_command_with_input(
-            deploy_command_list,
-            f"{stack_name}\n{region}\n\nN\nCAPABILITY_IAM CAPABILITY_AUTO_EXPAND\nn\nN\n".encode(),
-        )
+            deploy_process_execute = self.run_command_with_input(
+                deploy_command_list,
+                f"{stack_name}\n{region}\n\nN\nCAPABILITY_IAM CAPABILITY_AUTO_EXPAND\nn\nN\n".encode(),
+            )
 
-        if will_succeed:
-            self.assertEqual(deploy_process_execute.process.returncode, 0)
-        else:
-            self.assertEqual(deploy_process_execute.process.returncode, 1)
-            self.assertIn("Property \\'ApplicationId\\' cannot be resolved.", str(deploy_process_execute.stderr))
+            if will_succeed:
+                self.assertEqual(deploy_process_execute.process.returncode, 0)
+            else:
+                self.assertEqual(deploy_process_execute.process.returncode, 1)
+                self.assertIn("Property \\'ApplicationId\\' cannot be resolved.", str(deploy_process_execute.stderr))
 
     @parameterized.expand(
         [os.path.join("deep-nested", "template.yaml"), os.path.join("deep-nested-image", "template.yaml")]
@@ -1394,7 +1528,7 @@ to create a managed default bucket, or run sam deploy --guided",
         )
 
         deploy_process_execute = self.run_command(deploy_command_list)
-        self.assertEqual(deploy_process_execute.process.returncode, 0)
+        self.assertEqual(deploy_process_execute.process.returncode, 1)
 
         # Check if the stack is deleted from CloudFormation
         stack_exists = True
@@ -1452,7 +1586,7 @@ to create a managed default bucket, or run sam deploy --guided",
         )
 
         deploy_process_execute = self.run_command(deploy_command_list)
-        self.assertEqual(deploy_process_execute.process.returncode, 0)
+        self.assertEqual(deploy_process_execute.process.returncode, 1)
 
         # Check if the stack rolled back successfully
         result = self.cfn_client.describe_stacks(StackName=stack_name)
@@ -1505,7 +1639,7 @@ to create a managed default bucket, or run sam deploy --guided",
         )
 
         deploy_process_execute = self.run_command(deploy_command_list)
-        self.assertEqual(deploy_process_execute.process.returncode, 0)
+        self.assertEqual(deploy_process_execute.process.returncode, 1)
 
         # Check if the stack is deleted from CloudFormation
         stack_exists = True

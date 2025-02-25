@@ -5,9 +5,8 @@ import logging
 
 import boto3
 import click
-from serverlessrepo.publish import CREATE_APPLICATION
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import aws_creds_options, pass_context, print_cmdline_args
 from samcli.cli.main import common_options as cli_framework_options
 from samcli.commands._utils.command_exception_handler import command_exception_handler
@@ -15,6 +14,7 @@ from samcli.commands._utils.options import template_common_option
 from samcli.commands._utils.template import TemplateFailedParsingException, TemplateNotFoundException, get_template_data
 from samcli.lib.telemetry.metric import track_command
 from samcli.lib.utils.version_checker import check_newer_version
+from samcli.vendor.serverlessrepo.publish import CREATE_APPLICATION
 
 LOG = logging.getLogger(__name__)
 
@@ -41,14 +41,21 @@ SHORT_HELP = "Publish a packaged AWS SAM template to the AWS Serverless Applicat
 SERVERLESSREPO_CONSOLE_URL = "https://console.aws.amazon.com/serverlessrepo/home?region={}#/published-applications/{}"
 SEMANTIC_VERSION_HELP = "Optional. The value provided here overrides SemanticVersion in the template metadata."
 SEMANTIC_VERSION = "SemanticVersion"
+FAIL_ON_SAME_VERSION = """
+If set, AWS SAM CLI will prevent a publish and return a non-zero exit code
+if the publish is attempted with a semantic version that already exists on the SAR application.
+Default is False.
+"""
 
 
 @click.command("publish", help=HELP_TEXT, short_help=SHORT_HELP)
-@configuration_option(provider=TomlProvider(section="parameters"))
+@configuration_option(provider=ConfigProvider(section="parameters"))
 @template_common_option
 @click.option("--semantic-version", help=SEMANTIC_VERSION_HELP)
+@click.option("--fail-on-same-version", default=False, required=False, is_flag=True, help=FAIL_ON_SAME_VERSION)
 @aws_creds_options
 @cli_framework_options
+@save_params_option
 @pass_context
 @track_command
 @check_newer_version
@@ -58,22 +65,26 @@ def cli(
     ctx,
     template_file,
     semantic_version,
+    fail_on_same_version,
+    save_params,
     config_file,
     config_env,
 ):
     # All logic must be implemented in the ``do_cli`` method. This helps with easy unit testing
 
-    do_cli(ctx, template_file, semantic_version)  # pragma: no cover
+    do_cli(ctx, template_file, semantic_version, fail_on_same_version)  # pragma: no cover
 
 
-def do_cli(ctx, template, semantic_version):
+def do_cli(ctx, template, semantic_version, fail_on_same_version):
     """Publish the application based on command line inputs."""
 
-    from serverlessrepo import publish_application
-    from serverlessrepo.exceptions import InvalidS3UriError, ServerlessRepoError
-    from serverlessrepo.parser import METADATA, SERVERLESS_REPO_APPLICATION
-
     from samcli.commands.exceptions import UserException
+    from samcli.vendor.serverlessrepo import publish_application
+    from samcli.vendor.serverlessrepo.exceptions import (
+        InvalidS3UriError,
+        ServerlessRepoError,
+    )
+    from samcli.vendor.serverlessrepo.parser import METADATA, SERVERLESS_REPO_APPLICATION
 
     try:
         template_data = get_template_data(template)
@@ -86,7 +97,7 @@ def do_cli(ctx, template, semantic_version):
         template_data.get(METADATA).get(SERVERLESS_REPO_APPLICATION)[SEMANTIC_VERSION] = semantic_version
 
     try:
-        publish_output = publish_application(template_data)
+        publish_output = publish_application(template=template_data, fail_on_same_version=fail_on_same_version)
         click.secho("Publish Succeeded", fg="green")
         click.secho(_gen_success_message(publish_output))
     except InvalidS3UriError as ex:

@@ -1,6 +1,7 @@
 """
 Lambda Function configuration data required by the runtime
 """
+
 from samcli.commands.local.cli_common.user_exceptions import InvalidSamTemplateException
 
 from .env_vars import EnvironmentVariables
@@ -31,6 +32,7 @@ class FunctionConfig:
         timeout=None,
         runtime_management_config=None,
         env_vars=None,
+        code_real_path=None,
     ):
         """
         Parameters
@@ -44,7 +46,8 @@ class FunctionConfig:
         handler : str
             Handler method
         imageuri : str
-            Name of the Lambda Image which is of the form {image}:{tag}
+            Location of the Lambda Image which is of the form {image}:{tag}, sha256:{digest},
+            or a path to a local archive
         imageconfig : str
             Image configuration which can be used set to entrypoint, command and working dir for the container.
         packagetype : str
@@ -79,6 +82,7 @@ class FunctionConfig:
         self.packagetype = packagetype
         self.handler = handler
         self.code_abs_path = code_abs_path
+        self.code_real_path = code_real_path
         self.layers = layers
         self.memory = memory or self._DEFAULT_MEMORY
         self.architecture = architecture

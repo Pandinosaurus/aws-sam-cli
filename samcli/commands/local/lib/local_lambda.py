@@ -4,9 +4,11 @@ Implementation of Local Lambda runner
 
 import logging
 import os
+import platform
 from typing import Any, Dict, Optional, cast
 
 import boto3
+import click
 from botocore.credentials import Credentials
 
 from samcli.commands.local.lib.debug_context import DebugContext
@@ -20,6 +22,7 @@ from samcli.lib.providers.provider import Function
 from samcli.lib.providers.sam_function_provider import SamFunctionProvider
 from samcli.lib.utils.architecture import validate_architecture_runtime
 from samcli.lib.utils.codeuri import resolve_code_path
+from samcli.lib.utils.colors import Colored
 from samcli.lib.utils.packagetype import IMAGE, ZIP
 from samcli.lib.utils.stream_writer import StreamWriter
 from samcli.local.docker.container import ContainerConnectionTimeoutException, ContainerResponseException
@@ -29,6 +32,13 @@ from samcli.local.lambdafn.exceptions import FunctionNotFound
 from samcli.local.lambdafn.runtime import LambdaRuntime
 
 LOG = logging.getLogger(__name__)
+
+RUST_LOCAL_INVOKE_DISCLAIMER = """
+DISCLAIMER: If your local machine is using Apple silicon and you are unable to run \"sam local invoke\" 
+you can try setting the \"SAM_BUILD_MODE\" environ variable to equal \"debug\". 
+Please note that this is only recommended when building and testing locally. 
+We advise customers to switch back to a release build by unsetting or removing the SAM_BUILD_MODE environ variable
+"""
 
 
 class LocalLambdaRunner:
@@ -45,12 +55,14 @@ class LocalLambdaRunner:
         local_runtime: LambdaRuntime,
         function_provider: SamFunctionProvider,
         cwd: str,
+        real_path: str,
         aws_profile: Optional[str] = None,
         aws_region: Optional[str] = None,
         env_vars_values: Optional[Dict[Any, Any]] = None,
         debug_context: Optional[DebugContext] = None,
         container_host: Optional[str] = None,
         container_host_interface: Optional[str] = None,
+        extra_hosts: Optional[dict] = None,
     ) -> None:
         """
         Initializes the class
@@ -65,11 +77,13 @@ class LocalLambdaRunner:
         :param DebugContext debug_context: Optional. Debug context for the function (includes port, args, and path).
         :param string container_host: Optional. Host of locally emulated Lambda container
         :param string container_host_interface: Optional. Interface that Docker host binds ports to
+        :param dict extra_hosts: Optional. Dict of hostname to IP resolutions
         """
 
         self.local_runtime = local_runtime
         self.provider = function_provider
         self.cwd = cwd
+        self.real_path = real_path
         self.aws_profile = aws_profile
         self.aws_region = aws_region
         self.env_vars_values = env_vars_values or {}
@@ -78,6 +92,7 @@ class LocalLambdaRunner:
         self._boto3_region: Optional[str] = None
         self.container_host = container_host
         self.container_host_interface = container_host_interface
+        self.extra_hosts = extra_hosts
 
     def invoke(
         self,
@@ -136,8 +151,15 @@ class LocalLambdaRunner:
             LOG.info("Invoking Container created from %s", function.imageuri)
 
         validate_architecture_runtime(function)
-
         config = self.get_invoke_config(function)
+
+        if (
+            function.metadata
+            and function.metadata.get("BuildMethod", "") == "rust-cargolambda"
+            and "macOS" in platform.platform()
+            and "arm64" in platform.platform()
+        ):
+            click.echo(Colored().yellow(RUST_LOCAL_INVOKE_DISCLAIMER))
 
         # Invoke the function
         try:
@@ -149,6 +171,7 @@ class LocalLambdaRunner:
                 stderr=stderr,
                 container_host=self.container_host,
                 container_host_interface=self.container_host_interface,
+                extra_hosts=self.extra_hosts,
             )
         except ContainerResponseException:
             # NOTE(sriram-mv): This should still result in a exit code zero to avoid regressions.
@@ -191,9 +214,12 @@ class LocalLambdaRunner:
 
         env_vars = self._make_env_vars(function)
         code_abs_path = None
+        code_real_path = None
         if function.packagetype == ZIP:
             code_abs_path = resolve_code_path(self.cwd, function.codeuri)
             LOG.debug("Resolved absolute path to code is %s", code_abs_path)
+            code_real_path = resolve_code_path(self.real_path, function.codeuri)
+            LOG.debug("Resolved real code path to %s", code_real_path)
 
         function_timeout = function.timeout
 
@@ -218,6 +244,7 @@ class LocalLambdaRunner:
             timeout=function_timeout,
             env_vars=env_vars,
             runtime_management_config=function.runtime_management_config,
+            code_real_path=code_real_path,
         )
 
     def _make_env_vars(self, function: Function) -> EnvironmentVariables:
@@ -296,6 +323,7 @@ class LocalLambdaRunner:
             function.memory,
             function.timeout,
             function.handler,
+            function.logging_config,
             variables=variables,
             shell_env_values=shell_env,
             override_values=overrides,

@@ -1,3 +1,4 @@
+import copy
 import os.path
 from unittest import TestCase
 from unittest.mock import patch, Mock
@@ -34,7 +35,7 @@ from samcli.lib.build.build_graph import (
     BuildHashingInformation,
     HANDLER_FIELD,
 )
-from samcli.lib.providers.provider import Function, LayerVersion
+from samcli.lib.providers.provider import Function, LayerVersion, FunctionBuildInfo
 from samcli.lib.utils import osutils
 from samcli.lib.utils.packagetype import ZIP
 
@@ -60,6 +61,7 @@ def generate_function(
     inlinecode=None,
     architectures=[X86_64],
     stack_path="",
+    function_build_info=FunctionBuildInfo.BuildableZip,
 ):
     if metadata is None:
         metadata = {}
@@ -85,6 +87,7 @@ def generate_function(
         codesign_config_arn,
         architectures,
         stack_path,
+        function_build_info,
     )
 
 
@@ -108,6 +111,7 @@ class TestConversionFunctions(TestCase):
         build_definition = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             X86_64,
             {"key": "value"},
@@ -206,7 +210,7 @@ class TestConversionFunctions(TestCase):
         self.assertEqual(build_definition.architecture, toml_table[ARCHITECTURE_FIELD])
 
     def test_minimal_function_build_definition_to_toml_table(self):
-        build_definition = FunctionBuildDefinition("runtime", "codeuri", ZIP, X86_64, {"key": "value"}, "handler")
+        build_definition = FunctionBuildDefinition("runtime", "codeuri", None, ZIP, X86_64, {"key": "value"}, "handler")
         build_definition.add_function(generate_function())
 
         toml_table = _function_build_definition_to_toml_table(build_definition)
@@ -285,7 +289,7 @@ class TestBuildGraph(TestCase):
     LAYER_NAME = "SumLayer"
     ZIP = ZIP
     RUNTIME = "python3.8"
-    LAYER_RUNTIME = "nodejs12.x"
+    LAYER_RUNTIME = "nodejs20.x"
     METADATA = {"Test": "hello", "Test2": "world"}
     UUID = "3c1c254e-cd4b-4d94-8c74-7ab870b36063"
     LAYER_UUID = "7dnc257e-cd4b-4d94-8c74-7ab870b3abc3"
@@ -351,6 +355,7 @@ class TestBuildGraph(TestCase):
             function_build_definition1 = FunctionBuildDefinition(
                 TestBuildGraph.RUNTIME,
                 TestBuildGraph.CODEURI,
+                None,
                 TestBuildGraph.ZIP,
                 TestBuildGraph.ARCHITECTURE_FIELD,
                 TestBuildGraph.METADATA,
@@ -439,6 +444,7 @@ class TestBuildGraph(TestCase):
             build_definition1 = FunctionBuildDefinition(
                 TestBuildGraph.RUNTIME,
                 TestBuildGraph.CODEURI,
+                None,
                 TestBuildGraph.ZIP,
                 TestBuildGraph.ARCHITECTURE_FIELD,
                 TestBuildGraph.METADATA,
@@ -463,6 +469,7 @@ class TestBuildGraph(TestCase):
             build_definition2 = FunctionBuildDefinition(
                 "another_runtime",
                 "another_codeuri",
+                None,
                 TestBuildGraph.ZIP,
                 ARM64,
                 None,
@@ -562,6 +569,7 @@ class TestBuildGraph(TestCase):
             build_definition = FunctionBuildDefinition(
                 TestBuildGraph.RUNTIME,
                 TestBuildGraph.CODEURI,
+                None,
                 TestBuildGraph.ZIP,
                 TestBuildGraph.ARCHITECTURE_FIELD,
                 TestBuildGraph.METADATA,
@@ -573,6 +581,7 @@ class TestBuildGraph(TestCase):
             updated_definition = FunctionBuildDefinition(
                 TestBuildGraph.RUNTIME,
                 TestBuildGraph.CODEURI,
+                None,
                 TestBuildGraph.ZIP,
                 TestBuildGraph.ARCHITECTURE_FIELD,
                 TestBuildGraph.METADATA,
@@ -625,10 +634,10 @@ class TestBuildGraph(TestCase):
         self, old_manifest, new_manifest, download_dependencies
     ):
         updated_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, {}, "app.handler", manifest_hash=old_manifest
+            "runtime", "codeuri", None, ZIP, X86_64, {}, "app.handler", manifest_hash=old_manifest
         )
         existing_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, {}, "app.handler", manifest_hash=new_manifest
+            "runtime", "codeuri", None, ZIP, X86_64, {}, "app.handler", manifest_hash=new_manifest
         )
         BuildGraph._compare_hash_changes([updated_definition], [existing_definition])
         self.assertEqual(existing_definition.download_dependencies, download_dependencies)
@@ -685,7 +694,16 @@ class TestBuildGraph(TestCase):
 class TestBuildDefinition(TestCase):
     def test_single_function_should_return_function_and_handler_name(self):
         build_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, {}, "handler", "source_hash", "manifest_hash", {"env_vars": "value"}
+            "runtime",
+            "codeuri",
+            None,
+            ZIP,
+            X86_64,
+            {},
+            "handler",
+            "source_hash",
+            "manifest_hash",
+            {"env_vars": "value"},
         )
         build_definition.add_function(generate_function())
         self.assertEqual(build_definition.get_handler_name(), "handler")
@@ -693,7 +711,16 @@ class TestBuildDefinition(TestCase):
 
     def test_no_function_should_raise_exception(self):
         build_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, {}, "handler", "source_hash", "manifest_hash", {"env_vars": "value"}
+            "runtime",
+            "codeuri",
+            None,
+            ZIP,
+            X86_64,
+            {},
+            "handler",
+            "source_hash",
+            "manifest_hash",
+            {"env_vars": "value"},
         )
 
         self.assertRaises(InvalidBuildGraphException, build_definition.get_handler_name)
@@ -701,10 +728,10 @@ class TestBuildDefinition(TestCase):
 
     def test_same_runtime_codeuri_metadata_should_reflect_as_same_object(self):
         build_definition1 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, {"key": "value"}, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, {"key": "value"}, "handler", "source_hash", "manifest_hash"
         )
         build_definition2 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, {"key": "value"}, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, {"key": "value"}, "handler", "source_hash", "manifest_hash"
         )
 
         self.assertEqual(build_definition1, build_definition2)
@@ -713,6 +740,7 @@ class TestBuildDefinition(TestCase):
         build_definition1 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             ARM64,
             {"key": "value", "SamResourceId": "resourceId1", "SamNormalized": True},
@@ -723,6 +751,7 @@ class TestBuildDefinition(TestCase):
         build_definition2 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             ARM64,
             {"key": "value", "SamResourceId": "resourceId2", "SamNormalized": True},
@@ -737,6 +766,7 @@ class TestBuildDefinition(TestCase):
         build_definition1 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             X86_64,
             {"key": "value"},
@@ -748,6 +778,7 @@ class TestBuildDefinition(TestCase):
         build_definition2 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             X86_64,
             {"key": "value"},
@@ -807,17 +838,17 @@ class TestBuildDefinition(TestCase):
     def test_different_runtime_codeuri_metadata_should_not_reflect_as_same_object(
         self, runtime1, codeuri1, metadata1, source_hash_1, runtime2, codeuri2, metadata2, source_hash_2
     ):
-        build_definition1 = FunctionBuildDefinition(runtime1, codeuri1, ZIP, ARM64, metadata1, source_hash_1)
-        build_definition2 = FunctionBuildDefinition(runtime2, codeuri2, ZIP, ARM64, metadata2, source_hash_2)
+        build_definition1 = FunctionBuildDefinition(runtime1, codeuri1, None, ZIP, ARM64, metadata1, source_hash_1)
+        build_definition2 = FunctionBuildDefinition(runtime2, codeuri2, None, ZIP, ARM64, metadata2, source_hash_2)
 
         self.assertNotEqual(build_definition1, build_definition2)
 
     def test_different_architecture_should_not_reflect_as_same_object(self):
         build_definition1 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, {"key": "value"}, "handler", "source_md5", {"env_vars": "value"}
+            "runtime", "codeuri", None, ZIP, X86_64, {"key": "value"}, "handler", "source_md5", {"env_vars": "value"}
         )
         build_definition2 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, {"key": "value"}, "handler", "source_md5", {"env_vars": "value"}
+            "runtime", "codeuri", None, ZIP, ARM64, {"key": "value"}, "handler", "source_md5", {"env_vars": "value"}
         )
 
         self.assertNotEqual(build_definition1, build_definition2)
@@ -826,6 +857,7 @@ class TestBuildDefinition(TestCase):
         build_definition1 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             ARM64,
             {"key": "value"},
@@ -837,6 +869,7 @@ class TestBuildDefinition(TestCase):
         build_definition2 = FunctionBuildDefinition(
             "runtime",
             "codeuri",
+            None,
             ZIP,
             ARM64,
             {"key": "value"},
@@ -850,13 +883,13 @@ class TestBuildDefinition(TestCase):
 
     def test_euqality_with_another_object(self):
         build_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, X86_64, None, "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, X86_64, None, "source_hash", "manifest_hash"
         )
         self.assertNotEqual(build_definition, {})
 
     def test_str_representation(self):
         build_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, None, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, None, "handler", "source_hash", "manifest_hash"
         )
         self.assertEqual(
             str(build_definition),
@@ -867,13 +900,13 @@ class TestBuildDefinition(TestCase):
         build_graph = BuildGraph("build/path")
         metadata = {"BuildMethod": "esbuild"}
         build_definition1 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
         )
         function1 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler-1"
         )
         build_definition2 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, metadata, "app.handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, metadata, "app.handler", "source_hash", "manifest_hash"
         )
         function2 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler-2"
@@ -892,13 +925,13 @@ class TestBuildDefinition(TestCase):
         build_graph = BuildGraph("build/path")
         metadata = {"BuildMethod": "esbuild"}
         build_definition1 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
         )
         function1 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler-1"
         )
         build_definition2 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, {}, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, {}, "handler", "source_hash", "manifest_hash"
         )
         function2 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata={}, handler="handler-2"
@@ -917,13 +950,13 @@ class TestBuildDefinition(TestCase):
         build_graph = BuildGraph("build/path")
         metadata = {"BuildMethod": "esbuild"}
         build_definition1 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
         )
         function1 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler"
         )
         build_definition2 = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
         )
         function2 = generate_function(
             runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, metadata={}, handler="handler"
@@ -943,7 +976,7 @@ class TestBuildDefinition(TestCase):
         patched_is_experimental.return_value = build_improvements_22_enabled
         build_graph = BuildGraph("build/path")
         build_definition = FunctionBuildDefinition(
-            "runtime", "codeuri", ZIP, ARM64, {}, "handler", "source_hash", "manifest_hash"
+            "runtime", "codeuri", None, ZIP, ARM64, {}, "handler", "source_hash", "manifest_hash"
         )
         function1 = generate_function(runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, handler="handler")
         function2 = generate_function(runtime=TestBuildGraph.RUNTIME, codeuri=TestBuildGraph.CODEURI, handler="handler")
@@ -959,3 +992,42 @@ class TestBuildDefinition(TestCase):
                 build_definition.get_build_dir("build_dir"),
                 build_definition.functions[0].get_build_dir("build_dir") + "-Shared",
             )
+
+    def test_deepcopy_build_definition(self):
+        build_definition = FunctionBuildDefinition(
+            "runtime", "codeuri", None, ZIP, ARM64, {}, "handler", "source_hash", "manifest_hash"
+        )
+        function1 = generate_function(runtime="runtime", codeuri="codeuri", handler="handler")
+        function2 = generate_function(runtime="runtime", codeuri="codeuri", handler="handler")
+        build_definition.add_function(function1)
+        build_definition.add_function(function2)
+        build_definitions = [build_definition]
+
+        copied_build_definitions = copy.deepcopy(build_definitions)
+
+        self.assertEqual(copied_build_definitions, build_definitions)
+
+    def test_go_runtime_different_handlers_are_not_equal(self):
+        build_graph = BuildGraph("build/path")
+        metadata = {}
+        build_definition1 = FunctionBuildDefinition(
+            "go1.x", "codeuri", None, ZIP, ARM64, metadata, "handler", "source_hash", "manifest_hash"
+        )
+        function1 = generate_function(
+            runtime="go1.x", codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler"
+        )
+        build_definition2 = FunctionBuildDefinition(
+            "go1.x", "codeuri", None, ZIP, ARM64, metadata, "handler.new", "source_hash", "manifest_hash"
+        )
+        function2 = generate_function(
+            runtime="go1.x", codeuri=TestBuildGraph.CODEURI, metadata=metadata, handler="handler.new"
+        )
+        build_graph.put_function_build_definition(build_definition1, function1)
+        build_graph.put_function_build_definition(build_definition2, function2)
+
+        build_definitions = build_graph.get_function_build_definitions()
+
+        self.assertNotEqual(build_definition1, build_definition2)
+        self.assertEqual(len(build_definitions), 2)
+        self.assertEqual(len(build_definition1.functions), 1)
+        self.assertEqual(len(build_definition2.functions), 1)

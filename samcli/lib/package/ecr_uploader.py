@@ -1,9 +1,11 @@
 """
 Client for uploading packaged artifacts to ecr
 """
+
 import base64
-import io
 import logging
+from io import StringIO
+from pathlib import Path
 from typing import Dict
 
 import botocore
@@ -17,6 +19,7 @@ from samcli.commands.package.exceptions import (
     DockerPushFailedError,
     ECRAuthorizationError,
 )
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.docker.log_streamer import LogStreamer, LogStreamError
 from samcli.lib.package.image_utils import tag_translation
 from samcli.lib.utils.osutils import stderr
@@ -35,7 +38,7 @@ class ECRUploader:
     def __init__(
         self, docker_client, ecr_client, ecr_repo, ecr_repo_multi, no_progressbar=False, tag="latest", stream=stderr()
     ):
-        self.docker_client = docker_client if docker_client else docker.from_env()
+        self.docker_client = docker_client if docker_client else docker.from_env(version=DOCKER_MIN_API_VERSION)
         self.ecr_client = ecr_client
         self.ecr_repo = ecr_repo
         self.ecr_repo_multi = ecr_repo_multi
@@ -74,10 +77,26 @@ class ECRUploader:
         if not self.login_session_active:
             self.login()
             self.login_session_active = True
-        try:
-            docker_img = self.docker_client.images.get(image)
 
-            _tag = tag_translation(image, docker_image_id=docker_img.id, gen_tag=self.tag)
+        # Sometimes the `resource_name` is used as the `image` parameter to `tag_translation`.
+        # This is because these two cases (directly from an archive or by ID) are effectively
+        # anonymous, so the best identifier available in scope is the resource name.
+        try:
+            if Path(image).is_file():
+                with open(image, mode="rb") as image_archive:
+                    [docker_img, *rest] = self.docker_client.images.load(image_archive)
+                    if len(rest) != 0:
+                        raise DockerPushFailedError("Archive must represent a single image")
+                    _tag = tag_translation(resource_name, docker_image_id=docker_img.id, gen_tag=self.tag)
+            else:
+                # If it's not a file, it's gotta be a {repo}:{tag} or a sha256:{digest}
+                docker_img = self.docker_client.images.get(image)
+                _tag = tag_translation(
+                    resource_name if image == docker_img.id else image,
+                    docker_image_id=docker_img.id,
+                    gen_tag=self.tag,
+                )
+
             repository = (
                 self.ecr_repo
                 if not self.ecr_repo_multi or not isinstance(self.ecr_repo_multi, dict)
@@ -93,7 +112,7 @@ class ECRUploader:
             else:
                 # we need to wait till the image got pushed to ecr, without this workaround sam sync for template
                 # contains image always fail, because the provided ecr uri is not exist.
-                _log_streamer = LogStreamer(stream=StreamWriter(stream=io.BytesIO(), auto_flush=True))
+                _log_streamer = LogStreamer(stream=StreamWriter(stream=StringIO(), auto_flush=True))
                 _log_streamer.stream_progress(push_logs)
 
         except (BuildError, APIError, LogStreamError) as ex:

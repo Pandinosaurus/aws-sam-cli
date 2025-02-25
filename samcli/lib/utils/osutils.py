@@ -1,6 +1,9 @@
 """
 Common OS utilities
 """
+
+import errno
+import io
 import logging
 import os
 import shutil
@@ -9,7 +12,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 LOG = logging.getLogger(__name__)
 
@@ -78,7 +81,7 @@ def rmtree_if_exists(path: Union[str, Path]):
         shutil.rmtree(path_obj)
 
 
-def stdout():
+def stdout() -> io.TextIOWrapper:
     """
     Returns the stdout as a byte stream in a Py2/PY3 compatible manner
 
@@ -87,10 +90,15 @@ def stdout():
     io.BytesIO
         Byte stream of Stdout
     """
-    return sys.stdout.buffer
+    # ensure stdout is utf8
+
+    stdout_text_io = cast(io.TextIOWrapper, sys.stdout)
+    stdout_text_io.reconfigure(encoding="utf-8")
+
+    return stdout_text_io
 
 
-def stderr():
+def stderr() -> io.TextIOWrapper:
     """
     Returns the stderr as a byte stream in a Py2/PY3 compatible manner
 
@@ -99,7 +107,11 @@ def stderr():
     io.BytesIO
         Byte stream of stderr
     """
-    return sys.stderr.buffer
+    # ensure stderr is utf8
+    stderr_text_io = cast(io.TextIOWrapper, sys.stderr)
+    stderr_text_io.reconfigure(encoding="utf-8")
+
+    return stderr_text_io
 
 
 def remove(path):
@@ -167,7 +179,15 @@ def copytree(source, destination, ignore=None):
         if os.path.isdir(new_source):
             copytree(new_source, new_destination, ignore=ignore)
         else:
-            shutil.copy2(new_source, new_destination)
+            try:
+                shutil.copy2(new_source, new_destination, follow_symlinks=False)
+            except OSError as e:
+                if e.errno != errno.EINVAL:
+                    raise e
+
+                # Symlinks do not get copied for Windows using shutil.copy2, which is why
+                # they are handled separately here.
+                create_symlink_or_copy(new_source, new_destination)
 
 
 def convert_files_to_unix_line_endings(path: str, target_files: Optional[List[str]] = None) -> None:

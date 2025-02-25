@@ -1,23 +1,34 @@
 """
 Unit test base class for Terraform prepare hook
 """
+
 from unittest import TestCase
 
 from samcli.hook_packages.terraform.hooks.prepare.translate import AWS_PROVIDER_NAME, NULL_RESOURCE_PROVIDER_NAME
 from samcli.lib.utils.resources import (
+    AWS_APIGATEWAY_V2_AUTHORIZER,
     AWS_LAMBDA_FUNCTION as CFN_AWS_LAMBDA_FUNCTION,
     AWS_LAMBDA_LAYERVERSION,
     AWS_APIGATEWAY_RESOURCE,
     AWS_APIGATEWAY_RESTAPI,
     AWS_APIGATEWAY_STAGE,
     AWS_APIGATEWAY_METHOD,
+    AWS_APIGATEWAY_AUTHORIZER,
+    AWS_APIGATEWAY_V2_API,
+    AWS_APIGATEWAY_V2_ROUTE,
+    AWS_APIGATEWAY_V2_STAGE,
+    AWS_APIGATEWAY_V2_INTEGRATION,
 )
-from samcli.hook_packages.terraform.hooks.prepare.resources.internal import INTERNAL_API_GATEWAY_INTEGRATION
+from samcli.hook_packages.terraform.hooks.prepare.resources.internal import (
+    INTERNAL_API_GATEWAY_INTEGRATION,
+    INTERNAL_API_GATEWAY_INTEGRATION_RESPONSE,
+)
 
 
 class PrepareHookUnitBase(TestCase):
     def setUp(self) -> None:
         self.output_dir = "/output/dir"
+        self.app_root = "/app/root"
         self.project_root = "/project/root"
 
         self.mock_logical_id_hash = "12AB34CD"
@@ -43,7 +54,17 @@ class PrepareHookUnitBase(TestCase):
         self.apigw_stage_name = "my_stage"
         self.apigw_rest_api_name = "my_rest_api"
         self.apigw_method_name = "my_method"
+        self.apigw_method_with_auth_name = "my_method_auth"
         self.apigw_integration_name = "my_integration"
+        self.apigw_authorizer_name = "my_authorizer"
+        self.apigw_integration_response_name = "my_integration_response"
+
+        self.apigwv2_api_name = "my_apigwv2_api"
+        self.apigwv2_api_quick_create_name = "my_apigwv2_api_quick_create"
+        self.apigwv2_route_name = "my_apigwv2_route"
+        self.apigwv2_stage_name = "my_apigwv2_stage"
+        self.apigwv2_integration_name = "my_apigwv2_integration"
+        self.apigwv2_authorizer_name = "my_authorizer_v2"
 
         self.tf_function_common_properties: dict = {
             "function_name": self.zip_function_name,
@@ -51,7 +72,7 @@ class PrepareHookUnitBase(TestCase):
             "environment": [{"variables": {"foo": "bar", "hello": "world"}}],
             "handler": "index.handler",
             "package_type": "Zip",
-            "runtime": "python3.7",
+            "runtime": "python3.12",
             "layers": ["layer_arn1", "layer_arn2"],
             "timeout": 3,
             "memory_size": 128,
@@ -62,7 +83,7 @@ class PrepareHookUnitBase(TestCase):
             "Environment": {"Variables": {"foo": "bar", "hello": "world"}},
             "Handler": "index.handler",
             "PackageType": "Zip",
-            "Runtime": "python3.7",
+            "Runtime": "python3.12",
             "Layers": ["layer_arn1", "layer_arn2"],
             "Timeout": 3,
             "MemorySize": 128,
@@ -87,12 +108,12 @@ class PrepareHookUnitBase(TestCase):
 
         self.tf_layer_common_properties: dict = {
             "layer_name": self.lambda_layer_name,
-            "compatible_runtimes": ["nodejs14.x", "nodejs16.x"],
+            "compatible_runtimes": ["nodejs18.x", "nodejs20.x"],
             "compatible_architectures": ["arm64"],
         }
         self.expected_cfn_layer_common_properties: dict = {
             "LayerName": self.lambda_layer_name,
-            "CompatibleRuntimes": ["nodejs14.x", "nodejs16.x"],
+            "CompatibleRuntimes": ["nodejs18.x", "nodejs20.x"],
             "CompatibleArchitectures": ["arm64"],
         }
 
@@ -329,8 +350,33 @@ class PrepareHookUnitBase(TestCase):
             "provider_name": AWS_PROVIDER_NAME,
         }
 
+        self.tf_apigw_integration_response_common_attributes: dict = {
+            "type": "aws_api_gateway_integration_response",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
         self.tf_apigw_method_common_attributes: dict = {
             "type": "aws_api_gateway_method",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigwv2_api_common_attributes: dict = {
+            "type": "aws_apigatewayv2_api",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigwv2_route_common_attributes: dict = {
+            "type": "aws_apigatewayv2_route",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigwv2_stage_common_attributes: dict = {
+            "type": "aws_apigatewayv2_stage",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigwv2_integration_common_attributes: dict = {
+            "type": "aws_apigatewayv2_integration",
             "provider_name": AWS_PROVIDER_NAME,
         }
 
@@ -561,6 +607,76 @@ class PrepareHookUnitBase(TestCase):
             "Metadata": {"SamResourceId": f"aws_api_gateway_integration.{self.apigw_integration_name}"},
         }
 
+        self.tf_apigw_authorizer_common_attributes: dict = {
+            "type": "aws_api_gateway_authorizer",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigw_authorizer_properties: dict = {
+            "name": self.apigw_authorizer_name,
+            "rest_api_id": "aws_api_gateway_rest_api.demo.id",
+            "authorizer_uri": "aws_lambda_function.authorizer.invoke_arn",
+            "identity_source": "method.request.header.Authorization",
+            "type": "TOKEN",
+            "identity_validation_expression": "^123$",
+        }
+
+        self.expected_cfn_apigw_authorizer_properties: dict = {
+            "Name": self.apigw_authorizer_name,
+            "RestApiId": "aws_api_gateway_rest_api.demo.id",
+            "AuthorizerUri": "aws_lambda_function.authorizer.invoke_arn",
+            "IdentitySource": "method.request.header.Authorization",
+            "Type": "TOKEN",
+            "IdentityValidationExpression": "^123$",
+        }
+
+        self.tf_apigw_authorizer_resource: dict = {
+            **self.tf_apigw_authorizer_common_attributes,
+            "values": self.tf_apigw_authorizer_properties,
+            "address": f"aws_api_gateway_authorizer.{self.apigw_authorizer_name}",
+            "name": self.apigw_authorizer_name,
+        }
+
+        self.expected_cfn_apigw_authorizer: dict = {
+            "Type": AWS_APIGATEWAY_AUTHORIZER,
+            "Properties": self.expected_cfn_apigw_authorizer_properties,
+            "Metadata": {"SamResourceId": f"aws_api_gateway_authorizer.{self.apigw_authorizer_name}"},
+        }
+
+        self.tf_apigw_integration_response_properties: dict = {
+            "rest_api_id": "aws_api_gateway_rest_api.MyDemoAPI.id",
+            "resource_id": "aws_api_gateway_resource.MyResource.id",
+            "http_method": "POST",
+            "status_code": 200,
+            "response_parameters": {
+                "method.response.header.X-Some-Header": "integration.response.header.X-Some-Other-Header",
+                "method.response.body.x-body": "integration.response.body.X-Some-Other-Body",
+            },
+        }
+
+        self.expected_internal_apigw_integration_response_properties: dict = {
+            "RestApiId": "aws_api_gateway_rest_api.MyDemoAPI.id",
+            "ResourceId": "aws_api_gateway_resource.MyResource.id",
+            "HttpMethod": "POST",
+            "ResponseParameters": {
+                "method.response.header.X-Some-Header": "integration.response.header.X-Some-Other-Header",
+                "method.response.body.x-body": "integration.response.body.X-Some-Other-Body",
+            },
+        }
+
+        self.tf_apigw_integration_response_resource: dict = {
+            **self.tf_apigw_integration_response_common_attributes,
+            "values": self.tf_apigw_integration_response_properties,
+            "address": f"aws_api_gateway_integration.{self.apigw_integration_response_name}",
+            "name": self.apigw_integration_response_name,
+        }
+
+        self.expected_internal_apigw_integration_response: dict = {
+            "Type": INTERNAL_API_GATEWAY_INTEGRATION_RESPONSE,
+            "Properties": self.expected_internal_apigw_integration_response_properties,
+            "Metadata": {"SamResourceId": f"aws_api_gateway_integration.{self.apigw_integration_response_name}"},
+        }
+
         self.tf_apigw_method_properties: dict = {
             "rest_api_id": "aws_api_gateway_rest_api.MyDemoAPI.id",
             "resource_id": "aws_api_gateway_resource.MyDemoResource.id",
@@ -586,6 +702,33 @@ class PrepareHookUnitBase(TestCase):
             "Type": AWS_APIGATEWAY_METHOD,
             "Properties": self.expected_cfn_apigw_method_properties,
             "Metadata": {"SamResourceId": f"aws_api_gateway_method.{self.apigw_method_name}"},
+        }
+
+        self.tf_apigw_method_with_auth_properties: dict = {
+            "rest_api_id": "aws_api_gateway_rest_api.MyDemoAPI.id",
+            "resource_id": "aws_api_gateway_resource.MyDemoResource.id",
+            "http_method": "ANY",
+            "operation_name": "AnyOperation",
+        }
+
+        self.expected_cfn_apigw_method_with_auth_properties: dict = {
+            "RestApiId": "aws_api_gateway_rest_api.MyDemoAPI.id",
+            "ResourceId": "aws_api_gateway_resource.MyDemoResource.id",
+            "HttpMethod": "ANY",
+            "OperationName": "AnyOperation",
+        }
+
+        self.tf_apigw_method_with_auth_resource: dict = {
+            **self.tf_apigw_method_common_attributes,
+            "values": self.tf_apigw_method_with_auth_properties,
+            "address": f"aws_api_gateway_method.{self.apigw_method_with_auth_name}",
+            "name": self.apigw_method_with_auth_name,
+        }
+
+        self.expected_cfn_apigw_method_with_auth: dict = {
+            "Type": AWS_APIGATEWAY_METHOD,
+            "Properties": self.expected_cfn_apigw_method_with_auth_properties,
+            "Metadata": {"SamResourceId": f"aws_api_gateway_method.{self.apigw_method_with_auth_name}"},
         }
 
         self.tf_apigw_stage_properties: dict = {
@@ -652,6 +795,194 @@ class PrepareHookUnitBase(TestCase):
             "Metadata": {"SamResourceId": f"aws_api_gateway_rest_api.{self.apigw_rest_api_name}"},
         }
 
+        self.tf_apigwv2_api_properties: dict = {
+            "name": "my_v2_api",
+            "protocol_type": "HTTP",
+            "cors_configuration": [
+                {
+                    "allow_credentials": True,
+                    "allow_headers": ["Content-Type"],
+                    "allow_methods": ["GET", "OPTIONS", "POST"],
+                    "allow_origins": ["my-origin.com"],
+                    "expose_headers": None,
+                    "max_age": 500,
+                }
+            ],
+        }
+
+        self.expected_cfn_apigwv2_api_properties: dict = {
+            "Name": "my_v2_api",
+            "ProtocolType": "HTTP",
+            "CorsConfiguration": {
+                "AllowCredentials": True,
+                "AllowHeaders": ["Content-Type"],
+                "AllowMethods": ["GET", "OPTIONS", "POST"],
+                "AllowOrigins": ["my-origin.com"],
+                "MaxAge": 500,
+            },
+        }
+
+        self.tf_apigwv2_api_resource: dict = {
+            **self.tf_apigwv2_api_common_attributes,
+            "values": self.tf_apigwv2_api_properties,
+            "address": f"aws_apigatewayv2_api.{self.apigwv2_api_name}",
+            "name": self.apigwv2_api_name,
+        }
+
+        self.expected_cfn_apigwv2_api: dict = {
+            "Type": AWS_APIGATEWAY_V2_API,
+            "Properties": self.expected_cfn_apigwv2_api_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_api.{self.apigwv2_api_name}"},
+        }
+
+        self.tf_apigwv2_api_quick_create_properties: dict = {
+            "name": "my_v2_api_quick_create",
+            "protocol_type": "HTTP",
+            "target": "arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/"
+            "arn:aws:lambda:{region}:{account-id}:function:{function-name}/invocations",
+            "route_key": "my_route",
+        }
+
+        self.expected_cfn_apigwv2_api_quick_create_properties: dict = {
+            "Name": "my_v2_api_quick_create",
+            "ProtocolType": "HTTP",
+            "Target": "arn:aws:apigateway:{region}:lambda:path/2015-03-31/functions/"
+            "arn:aws:lambda:{region}:{account-id}:function:{function-name}/invocations",
+            "RouteKey": "my_route",
+        }
+
+        self.tf_apigwv2_api_quick_create_resource: dict = {
+            **self.tf_apigwv2_api_common_attributes,
+            "values": self.tf_apigwv2_api_quick_create_properties,
+            "address": f"aws_apigatewayv2_api.{self.apigwv2_api_quick_create_name}",
+            "name": self.apigwv2_api_quick_create_name,
+        }
+
+        self.expected_cfn_apigwv2_api_quick_create: dict = {
+            "Type": AWS_APIGATEWAY_V2_API,
+            "Properties": self.expected_cfn_apigwv2_api_quick_create_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_api.{self.apigwv2_api_quick_create_name}"},
+        }
+
+        self.tf_apigwv2_route_properties: dict = {
+            "api_id": "aws_apigatewayv2_api.my_api.id",
+            "target": "aws_apigatewayv2_integration.example.id",
+            "route_key": "$default",
+            "operation_name": "my_operation",
+        }
+
+        self.expected_cfn_apigwv2_route_properties: dict = {
+            "ApiId": "aws_apigatewayv2_api.my_api.id",
+            "Target": "aws_apigatewayv2_integration.example.id",
+            "RouteKey": "$default",
+            "OperationName": "my_operation",
+        }
+
+        self.tf_apigwv2_route_resource: dict = {
+            **self.tf_apigwv2_route_common_attributes,
+            "values": self.tf_apigwv2_route_properties,
+            "address": f"aws_apigatewayv2_route.{self.apigwv2_route_name}",
+            "name": self.apigwv2_route_name,
+        }
+
+        self.expected_cfn_apigwv2_route: dict = {
+            "Type": AWS_APIGATEWAY_V2_ROUTE,
+            "Properties": self.expected_cfn_apigwv2_route_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_route.{self.apigwv2_route_name}"},
+        }
+
+        self.tf_apigwv2_stage_properties: dict = {
+            "api_id": "aws_apigatewayv2_api.my_api.id",
+            "name": "example-stage",
+            "stage_variables": {"foo": "bar"},
+        }
+
+        self.expected_cfn_apigwv2_stage_properties: dict = {
+            "ApiId": "aws_apigatewayv2_api.my_api.id",
+            "StageName": "example-stage",
+            "StageVariables": {"foo": "bar"},
+        }
+
+        self.tf_apigwv2_stage_resource: dict = {
+            **self.tf_apigwv2_stage_common_attributes,
+            "values": self.tf_apigwv2_stage_properties,
+            "address": f"aws_apigatewayv2_stage.{self.apigwv2_stage_name}",
+            "name": self.apigwv2_stage_name,
+        }
+
+        self.expected_cfn_apigwv2_stage: dict = {
+            "Type": AWS_APIGATEWAY_V2_STAGE,
+            "Properties": self.expected_cfn_apigwv2_stage_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_stage.{self.apigwv2_stage_name}"},
+        }
+
+        self.tf_apigwv2_integration_properties: dict = {
+            "api_id": "aws_apigatewayv2_api.my_api.id",
+            "integration_type": "AWS_PROXY",
+            "integration_method": "POST",
+            "integration_uri": "aws_lambda_function.HelloWorldFunction.invoke_arn",
+            "payload_format_version": "2.0",
+        }
+
+        self.expected_cfn_apigwv2_integration_properties: dict = {
+            "ApiId": "aws_apigatewayv2_api.my_api.id",
+            "IntegrationType": "AWS_PROXY",
+            "IntegrationMethod": "POST",
+            "IntegrationUri": "aws_lambda_function.HelloWorldFunction.invoke_arn",
+            "PayloadFormatVersion": "2.0",
+        }
+
+        self.tf_apigwv2_integration_resource: dict = {
+            **self.tf_apigwv2_integration_common_attributes,
+            "values": self.tf_apigwv2_integration_properties,
+            "address": f"aws_apigatewayv2_integration.{self.apigwv2_integration_name}",
+            "name": self.apigwv2_integration_name,
+        }
+
+        self.expected_cfn_apigwv2_integration: dict = {
+            "Type": AWS_APIGATEWAY_V2_INTEGRATION,
+            "Properties": self.expected_cfn_apigwv2_integration_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_integration.{self.apigwv2_integration_name}"},
+        }
+
+        self.tf_apigwv2_authorizer_common_attributes: dict = {
+            "type": "aws_apigatewayv2_authorizer",
+            "provider_name": AWS_PROVIDER_NAME,
+        }
+
+        self.tf_apigwv2_authorizer_properties: dict = {
+            "api_id": "aws_apigatewayv2_api.my_api.id",
+            "authorizer_type": "REQUEST",
+            "authorizer_uri": "aws_lambda_function.authorizerv2.invoke_arn",
+            "name": self.apigwv2_authorizer_name,
+            "authorizer_payload_format_version": "2.0",
+            "identity_sources": ["$request.header.hello"],
+            "enable_simple_responses": False,
+        }
+
+        self.expected_cfn_apigwv2_authorizer_properties: dict = {
+            "ApiId": "aws_apigatewayv2_api.my_api.id",
+            "AuthorizerType": "REQUEST",
+            "AuthorizerUri": "aws_lambda_function.authorizerv2.invoke_arn",
+            "Name": self.apigwv2_authorizer_name,
+            "AuthorizerPayloadFormatVersion": "2.0",
+            "IdentitySource": ["$request.header.hello"],
+            "EnableSimpleResponses": False,
+        }
+
+        self.tf_apigwv2_authorizer_resource: dict = {
+            **self.tf_apigwv2_authorizer_common_attributes,
+            "values": self.tf_apigwv2_authorizer_properties,
+            "address": f"aws_apigatewayv2_authorizer.{self.apigwv2_authorizer_name}",
+            "name": self.apigwv2_authorizer_name,
+        }
+
+        self.expected_cfn_apigwv2_authorizer: dict = {
+            "Type": AWS_APIGATEWAY_V2_AUTHORIZER,
+            "Properties": self.expected_cfn_apigwv2_authorizer_properties,
+            "Metadata": {"SamResourceId": f"aws_apigatewayv2_authorizer.{self.apigwv2_authorizer_name}"},
+        }
+
         self.tf_json_with_root_module_only: dict = {
             "planned_values": {
                 "root_module": {
@@ -663,7 +994,16 @@ class PrepareHookUnitBase(TestCase):
                         self.tf_apigw_rest_api_resource,
                         self.tf_apigw_stage_resource,
                         self.tf_apigw_method_resource,
+                        self.tf_apigw_method_with_auth_resource,
                         self.tf_apigw_integration_resource,
+                        self.tf_apigw_authorizer_resource,
+                        self.tf_apigw_integration_response_resource,
+                        self.tf_apigwv2_api_resource,
+                        self.tf_apigwv2_api_quick_create_resource,
+                        self.tf_apigwv2_route_resource,
+                        self.tf_apigwv2_stage_resource,
+                        self.tf_apigwv2_integration_resource,
+                        self.tf_apigwv2_authorizer_resource,
                     ]
                 }
             }
@@ -678,9 +1018,16 @@ class PrepareHookUnitBase(TestCase):
                 f"AwsApiGatewayRestApiMyRestApi{self.mock_logical_id_hash}": self.expected_cfn_apigw_rest_api,
                 f"AwsApiGatewayStageMyStage{self.mock_logical_id_hash}": self.expected_cfn_apigw_stage_resource,
                 f"AwsApiGatewayMethodMyMethod{self.mock_logical_id_hash}": self.expected_cfn_apigw_method,
+                f"AwsApiGatewayMethodMyMethodAuth{self.mock_logical_id_hash}": self.expected_cfn_apigw_method_with_auth,
+                f"AwsApiGatewayAuthorizerMyAuthorizer{self.mock_logical_id_hash}": self.expected_cfn_apigw_authorizer,
+                f"AwsApigatewayv2ApiMyApigwv2Api{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_api,
+                f"AwsApigatewayv2ApiMyApigwv2ApiQuickCreate{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_api_quick_create,
+                f"AwsApigatewayv2RouteMyApigwv2Route{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_route,
+                f"AwsApigatewayv2StageMyApigwv2Stage{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_stage,
+                f"AwsApigatewayv2IntegrationMyApigwv2Integration{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_integration,
+                f"AwsApigatewayv2AuthorizerMyAuthorizerV2{self.mock_logical_id_hash}": self.expected_cfn_apigwv2_authorizer,
             },
         }
-
         self.tf_json_with_root_module_with_sam_metadata_resources: dict = {
             "planned_values": {
                 "root_module": {

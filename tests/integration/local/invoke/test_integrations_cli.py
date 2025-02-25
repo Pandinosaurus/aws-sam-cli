@@ -12,7 +12,7 @@ import pytest
 import docker
 
 from tests.integration.local.invoke.layer_utils import LayerUtils
-from .invoke_integ_base import InvokeIntegBase
+from tests.integration.local.invoke.invoke_integ_base import IntegrationCliIntegBase, InvokeIntegBase
 from tests.testing_utils import IS_WINDOWS, RUNNING_ON_CI, RUNNING_TEST_FOR_MASTER_ON_CI, RUN_BY_CANARY, run_command
 
 # Layers tests require credentials and Appveyor will only add credentials to the env if the PR is from the same repo.
@@ -31,11 +31,26 @@ TIMEOUT = 300
         (Path("nested-templates/template-parent.yaml"),),
     ],
 )
-class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
+class TestSamPythonHelloWorldIntegration(IntegrationCliIntegBase):
     @pytest.mark.flaky(reruns=3)
     def test_invoke_returncode_is_zero(self):
         command_list = InvokeIntegBase.get_command_list(
             "HelloWorldServerlessFunction", template_path=self.template_path, event_path=self.event_path
+        )
+
+        process = Popen(command_list, stdout=PIPE)
+        try:
+            process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+
+        self.assertEqual(process.returncode, 0)
+
+    @pytest.mark.flaky(reruns=3)
+    def test_invoke_no_response_returncode_is_zero(self):
+        command_list = InvokeIntegBase.get_command_list(
+            "NoResponseServerlessFunction", template_path=self.template_path, event_path=self.event_path
         )
 
         process = Popen(command_list, stdout=PIPE)
@@ -160,7 +175,9 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
 
         # validate the time of the cli (timeout is set to 5s)
         self.assertGreater(wall_clock_cli_duration, 5)
-        self.assertLess(wall_clock_cli_duration, 20)
+        # validate the the duration is roughly under the timeout (with some additional
+        # time to take in account time for SAM CLI to do work)
+        self.assertLess(wall_clock_cli_duration, 25)
 
         self.assertEqual(process.returncode, 0)
         self.assertEqual(
@@ -225,7 +242,7 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
             "HelloWorldServerlessFunction",
             template_path=self.template_path,
             event_path=self.event_path,
-            invoke_image="amazon/aws-sam-cli-emulation-image-python3.7",
+            invoke_image="public.ecr.aws/lambda/python:3.11-x86_64",
         )
 
         process = Popen(command_list, stdout=PIPE)
@@ -292,6 +309,27 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
         self.assertEqual("{}", process_stdout.decode("utf-8"))
 
     @pytest.mark.flaky(reruns=3)
+    def test_invoke_returns_utf8(self):
+        command_list = InvokeIntegBase.get_command_list(
+            "EchoEventFunction", template_path=self.template_path, event_path=self.event_utf8_path
+        )
+
+        process = Popen(command_list, stdout=PIPE)
+        try:
+            stdout, _ = process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+
+        process_stdout = stdout.strip()
+
+        with open(self.event_utf8_path, encoding="utf8") as f:
+            expected_output = json.dumps(json.load(f), ensure_ascii=False)
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(expected_output, process_stdout.decode("utf-8"))
+
+    @pytest.mark.flaky(reruns=3)
     def test_invoke_with_env_using_parameters(self):
         command_list = InvokeIntegBase.get_command_list(
             "EchoEnvWithParameters",
@@ -311,12 +349,12 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
         environ = json.loads(process_stdout.decode("utf-8"))
 
         self.assertEqual(environ["Region"], "us-east-1")
-        self.assertEqual(environ["AccountId"], "123456789012")
+        self.assert_is_account_id_valid(environ["AccountId"])
         self.assertEqual(environ["Partition"], "aws")
         self.assertEqual(environ["StackName"], "local")
         self.assertEqual(
             environ["StackId"],
-            "arn:aws:cloudformation:us-east-1:123456789012:stack/" "local/51af3dc0-da77-11e4-872e-1234567db123",
+            "arn:aws:cloudformation:us-east-1:123456789012:stack/local/51af3dc0-da77-11e4-872e-1234567db123",
         )
 
         self.assertEqual(environ["URLSuffix"], "localhost")
@@ -326,7 +364,7 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
 
     @pytest.mark.flaky(reruns=3)
     def test_invoke_with_env_using_parameters_with_custom_region(self):
-        custom_region = "my-custom-region"
+        custom_region = "us-west-2"
 
         command_list = InvokeIntegBase.get_command_list(
             "EchoEnvWithParameters", template_path=self.template_path, event_path=self.event_path, region=custom_region
@@ -346,7 +384,7 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
 
     @pytest.mark.flaky(reruns=3)
     def test_invoke_with_env_with_aws_creds(self):
-        custom_region = "my-custom-region"
+        custom_region = "us-west-2"
         key = "key"
         secret = "secret"
         session = "session"
@@ -441,7 +479,7 @@ class TestSamPython37HelloWorldIntegration(InvokeIntegBase):
     @pytest.mark.flaky(reruns=3)
     @pytest.mark.timeout(timeout=TIMEOUT, method="thread")
     def test_skip_pull_image_in_env_var(self):
-        docker.from_env().api.pull("lambci/lambda:python3.7")
+        docker.from_env().api.pull("public.ecr.aws/lambda/python:3.11-x86_64")
 
         command_list = InvokeIntegBase.get_command_list(
             "HelloWorldLambdaFunction", template_path=self.template_path, event_path=self.event_path
@@ -1157,3 +1195,61 @@ class TestInvokeFunctionWithInlineCode(InvokeIntegBase):
             raise
 
         self.assertEqual(process.returncode, 1)
+
+
+class TestInvokeFunctionWithImageBytesAsReturn(InvokeIntegBase):
+    template = Path("template-return-image.yaml")
+
+    @pytest.mark.flaky(reruns=3)
+    def test_invoke_returncode_is_zero(self):
+        command_list = InvokeIntegBase.get_command_list(
+            "GetImageFunction", template_path=self.template_path, event_path=self.event_path
+        )
+
+        process = Popen(command_list, stdout=PIPE)
+        try:
+            process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+
+        self.assertEqual(process.returncode, 0)
+
+    @pytest.mark.flaky(reruns=3)
+    def test_invoke_image_is_returned(self):
+        command_list = InvokeIntegBase.get_command_list(
+            "GetImageFunction", template_path=self.template_path, event_path=self.event_path
+        )
+
+        process = Popen(command_list, stdout=PIPE)
+        try:
+            stdout, _ = process.communicate(timeout=TIMEOUT)
+        except TimeoutExpired:
+            process.kill()
+            raise
+
+        # The first byte of a png image file is \x89 so we can check that to verify that it returned an image
+        self.assertEqual(stdout[0:1], b"\x89")
+
+
+class TestInvokeFunctionWithError(InvokeIntegBase):
+    template = Path("template.yml")
+
+    def test_function_exception(self):
+        command_list = InvokeIntegBase.get_command_list(
+            function_to_invoke="RaiseExceptionFunction", template_path=self.template_path
+        )
+
+        stack_trace_lines = [
+            "[ERROR] Exception: Lambda is raising an exception",
+            "Traceback (most recent call last):",
+            '\xa0\xa0File "/var/task/main.py", line 51, in raise_exception',
+            '\xa0\xa0\xa0\xa0raise Exception("Lambda is raising an exception")',
+        ]
+
+        result = run_command(command_list)
+        stderr = result.stderr.decode("utf-8").strip()
+
+        self.assertEqual(result.process.returncode, 0)
+        for line in stack_trace_lines:
+            self.assertIn(line, stderr)

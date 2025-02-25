@@ -1,15 +1,26 @@
 """
 Unit test for Container class
 """
+
+import base64
+import json
+from unittest import TestCase
+from unittest.mock import MagicMock, Mock, call, patch, ANY
+from parameterized import parameterized
+
 import docker
 from docker.errors import NotFound, APIError
-from unittest import TestCase
-from unittest.mock import Mock, call, patch, ANY
-
 from requests import RequestException
 
 from samcli.lib.utils.packagetype import IMAGE
-from samcli.local.docker.container import Container, ContainerResponseException, ContainerConnectionTimeoutException
+from samcli.lib.utils.stream_writer import StreamWriter
+from samcli.local.docker.container import (
+    Container,
+    ContainerContext,
+    ContainerResponseException,
+    ContainerConnectionTimeoutException,
+    PortAlreadyInUse,
+)
 
 
 class TestContainer_init(TestCase):
@@ -66,6 +77,7 @@ class TestContainer_create(TestCase):
         self.additional_volumes = {"/somepath": {"blah": "blah value"}}
         self.container_host = "localhost"
         self.container_host_interface = "127.0.0.1"
+        self.container_context = ContainerContext.BUILD
 
         self.mock_docker_client = Mock()
         self.mock_docker_client.containers = Mock()
@@ -73,7 +85,8 @@ class TestContainer_create(TestCase):
         self.mock_docker_client.networks = Mock()
         self.mock_docker_client.networks.get = Mock()
 
-    def test_must_create_container_with_required_values(self):
+    @patch("samcli.local.docker.container.Container._create_mapped_symlink_files")
+    def test_must_create_container_with_required_values(self, mock_resolve_symlinks):
         """
         Create a container with only required values. Optional values are not provided
         :return:
@@ -93,7 +106,7 @@ class TestContainer_create(TestCase):
             exposed_ports=self.exposed_ports,
         )
 
-        container_id = container.create()
+        container_id = container.create(ContainerContext.INVOKE)
         self.assertEqual(container_id, generated_id)
         self.assertEqual(container.id, generated_id)
 
@@ -110,8 +123,10 @@ class TestContainer_create(TestCase):
             use_config_proxy=True,
         )
         self.mock_docker_client.networks.get.assert_not_called()
+        mock_resolve_symlinks.assert_called_with()  # When context is INVOKE
 
-    def test_must_create_container_including_all_optional_values(self):
+    @patch("samcli.local.docker.container.Container._create_mapped_symlink_files")
+    def test_must_create_container_including_all_optional_values(self, mock_resolve_symlinks):
         """
         Create a container with required and optional values.
         :return:
@@ -143,7 +158,7 @@ class TestContainer_create(TestCase):
             container_host_interface=self.container_host_interface,
         )
 
-        container_id = container.create()
+        container_id = container.create(ContainerContext.BUILD)
         self.assertEqual(container_id, generated_id)
         self.assertEqual(container.id, generated_id)
 
@@ -164,9 +179,11 @@ class TestContainer_create(TestCase):
             container="opts",
         )
         self.mock_docker_client.networks.get.assert_not_called()
+        mock_resolve_symlinks.assert_not_called()  # When context is BUILD
 
     @patch("samcli.local.docker.utils.os")
-    def test_must_create_container_translate_volume_path(self, os_mock):
+    @patch("samcli.local.docker.container.Container._create_mapped_symlink_files")
+    def test_must_create_container_translate_volume_path(self, mock_resolve_symlinks, os_mock):
         """
         Create a container with required and optional values, with windows style volume mount.
         :return:
@@ -203,7 +220,7 @@ class TestContainer_create(TestCase):
             additional_volumes=additional_volumes,
         )
 
-        container_id = container.create()
+        container_id = container.create(self.container_context)
         self.assertEqual(container_id, generated_id)
         self.assertEqual(container.id, generated_id)
 
@@ -225,7 +242,8 @@ class TestContainer_create(TestCase):
         )
         self.mock_docker_client.networks.get.assert_not_called()
 
-    def test_must_connect_to_network_on_create(self):
+    @patch("samcli.local.docker.container.Container._create_mapped_symlink_files")
+    def test_must_connect_to_network_on_create(self, mock_resolve_symlinks):
         """
         Create a container with only required values. Optional values are not provided
         :return:
@@ -247,7 +265,7 @@ class TestContainer_create(TestCase):
 
         container.network_id = network_id
 
-        container_id = container.create()
+        container_id = container.create(self.container_context)
         self.assertEqual(container_id, generated_id)
 
         self.mock_docker_client.containers.create.assert_called_with(
@@ -263,7 +281,8 @@ class TestContainer_create(TestCase):
         self.mock_docker_client.networks.get.assert_called_with(network_id)
         network_mock.connect.assert_called_with(container_id)
 
-    def test_must_connect_to_host_network_on_create(self):
+    @patch("samcli.local.docker.container.Container._create_mapped_symlink_files")
+    def test_must_connect_to_host_network_on_create(self, mock_resolve_symlinks):
         """
         Create a container with only required values. Optional values are not provided
         :return:
@@ -285,7 +304,7 @@ class TestContainer_create(TestCase):
 
         container.network_id = network_id
 
-        container_id = container.create()
+        container_id = container.create(self.container_context)
         self.assertEqual(container_id, generated_id)
 
         self.mock_docker_client.containers.create.assert_called_with(
@@ -296,7 +315,6 @@ class TestContainer_create(TestCase):
             tty=False,
             use_config_proxy=True,
             volumes=expected_volumes,
-            network_mode="host",
         )
 
         self.mock_docker_client.networks.get.assert_not_called()
@@ -310,7 +328,7 @@ class TestContainer_create(TestCase):
         container.is_created.return_value = True
 
         with self.assertRaises(RuntimeError):
-            container.create()
+            container.create(self.container_context)
 
 
 class TestContainer_stop(TestCase):
@@ -505,6 +523,26 @@ class TestContainer_start(TestCase):
         with self.assertRaises(RuntimeError):
             self.container.start()
 
+    def test_docker_raises_port_inuse_error(self):
+        self.container.is_created.return_value = True
+
+        container_mock = Mock()
+        self.mock_docker_client.containers.get.return_value = container_mock
+        container_mock.start.side_effect = PortAlreadyInUse()
+
+        with self.assertRaises(PortAlreadyInUse):
+            self.container.start()
+
+    def test_docker_raises_api_error(self):
+        self.container.is_created.return_value = True
+
+        container_mock = Mock()
+        self.mock_docker_client.containers.get.return_value = container_mock
+        container_mock.start.side_effect = APIError("Mock Error")
+
+        with self.assertRaises(APIError):
+            self.container.start()
+
     def test_must_not_support_input_data(self):
         self.container.is_created.return_value = True
 
@@ -554,8 +592,15 @@ class TestContainer_wait_for_result(TestCase):
 
     @patch("socket.socket")
     @patch("samcli.local.docker.container.requests")
-    def test_wait_for_result_no_error(self, mock_requests, patched_socket):
+    def test_wait_for_result_no_error_image_response(self, mock_requests, patched_socket):
         self.container.is_created.return_value = True
+
+        rie_response = b"\xff\xab"
+        resp_headers = {
+            "Date": "Tue, 02 Jan 2024 21:23:31 GMT",
+            "Content-Type": "image/jpeg",
+            "Transfer-Encoding": "chunked",
+        }
 
         real_container_mock = Mock()
         self.mock_docker_client.containers.get.return_value = real_container_mock
@@ -563,11 +608,15 @@ class TestContainer_wait_for_result(TestCase):
         output_itr = Mock()
         real_container_mock.attach.return_value = output_itr
         self.container._write_container_output = Mock()
+        self.container._create_threading_event = Mock()
+        self.container._create_threading_event.return_value = Mock()
 
         stdout_mock = Mock()
+        stdout_mock.write_bytes = Mock()
         stderr_mock = Mock()
         response = Mock()
-        response.content = b'{"hello":"world"}'
+        response.content = rie_response
+        response.headers = resp_headers
         mock_requests.post.return_value = response
 
         patched_socket.return_value = self.socket_mock
@@ -594,6 +643,71 @@ class TestContainer_wait_for_result(TestCase):
             data=b"{}",
             timeout=(self.container.RAPID_CONNECTION_TIMEOUT, None),
         )
+        stdout_mock.write_bytes.assert_called_with(rie_response)
+
+    @parameterized.expand(
+        [
+            (True, b'{"hello":"world"}', {"Date": "Tue, 02 Jan 2024 21:23:31 GMT", "Content-Type": "text"}),
+            (
+                False,
+                b"non-json-deserializable",
+                {"Date": "Tue, 02 Jan 2024 21:23:31 GMT", "Content-Type": "text/plain"},
+            ),
+            (False, b"", {"Date": "Tue, 02 Jan 2024 21:23:31 GMT", "Content-Type": "text/plain"}),
+        ]
+    )
+    @patch("socket.socket")
+    @patch("samcli.local.docker.container.requests")
+    def test_wait_for_result_no_error(
+        self, response_deserializable, rie_response, resp_headers, mock_requests, patched_socket
+    ):
+        self.container.is_created.return_value = True
+
+        real_container_mock = Mock()
+        self.mock_docker_client.containers.get.return_value = real_container_mock
+
+        output_itr = Mock()
+        real_container_mock.attach.return_value = output_itr
+        self.container._write_container_output = Mock()
+        self.container._create_threading_event = Mock()
+        self.container._create_threading_event.return_value = Mock()
+
+        stdout_mock = Mock()
+        stdout_mock.write_str = Mock()
+        stderr_mock = Mock()
+        response = Mock()
+        response.content = rie_response
+        response.headers = resp_headers
+        mock_requests.post.return_value = response
+
+        patched_socket.return_value = self.socket_mock
+
+        start_timer = Mock()
+        timer = Mock()
+        start_timer.return_value = timer
+
+        self.container.wait_for_result(
+            event=self.event, full_path=self.name, stdout=stdout_mock, stderr=stderr_mock, start_timer=start_timer
+        )
+
+        # since we passed in a start_timer function, ensure it's called and
+        # the timer is cancelled once execution is done
+        start_timer.assert_called()
+        timer.cancel.assert_called()
+
+        # make sure we wait for the same host+port that we make the post request to
+        host = self.container._container_host
+        port = self.container.rapid_port_host
+        self.socket_mock.connect_ex.assert_called_with((host, port))
+        mock_requests.post.assert_called_with(
+            self.container.URL.format(host=host, port=port, function_name="function"),
+            data=b"{}",
+            timeout=(self.container.RAPID_CONNECTION_TIMEOUT, None),
+        )
+        if response_deserializable:
+            stdout_mock.write_str.assert_called_with(json.dumps(json.loads(rie_response), ensure_ascii=False))
+        else:
+            stdout_mock.write_str.assert_called_with(rie_response.decode("utf-8"))
 
     @patch("socket.socket")
     @patch("samcli.local.docker.container.requests")
@@ -655,6 +769,8 @@ class TestContainer_wait_for_result(TestCase):
         output_itr = Mock()
         real_container_mock.attach.return_value = output_itr
         self.container._write_container_output = Mock()
+        self.container._create_threading_event = Mock()
+        self.container._create_threading_event.return_value = Mock()
 
         stdout_mock = Mock()
         stderr_mock = Mock()
@@ -697,17 +813,17 @@ class TestContainer_wait_for_result(TestCase):
         self.assertEqual(mock_requests.post.call_count, 0)
 
     def test_write_container_output_successful(self):
-        stdout_mock = Mock()
-        stderr_mock = Mock()
+        stdout_mock = Mock(spec=StreamWriter)
+        stderr_mock = Mock(spec=StreamWriter)
 
         def _output_iterator():
-            yield "Hello", None
-            yield None, "World"
+            yield b"Hello", None
+            yield None, b"World"
             raise ValueError("The pipe has been ended.")
 
         Container._write_container_output(_output_iterator(), stdout_mock, stderr_mock)
-        stdout_mock.assert_has_calls([call.write("Hello")])
-        stderr_mock.assert_has_calls([call.write("World")])
+        stdout_mock.assert_has_calls([call.write_str("Hello")])
+        stderr_mock.assert_has_calls([call.write_str("World")])
 
 
 class TestContainer_wait_for_logs(TestCase):
@@ -744,7 +860,9 @@ class TestContainer_wait_for_logs(TestCase):
         self.container.wait_for_logs(stdout=stdout_mock, stderr=stderr_mock)
 
         real_container_mock.attach.assert_called_with(stream=True, logs=True, demux=True)
-        self.container._write_container_output.assert_called_with(output_itr, stdout=stdout_mock, stderr=stderr_mock)
+        self.container._write_container_output.assert_called_with(
+            output_itr, stdout=stdout_mock, stderr=stderr_mock, event=None
+        )
 
     def test_must_skip_if_no_stdout_and_stderr(self):
         self.container.wait_for_logs()
@@ -761,33 +879,33 @@ class TestContainer_write_container_output(TestCase):
     def setUp(self):
         self.output_itr = [(b"stdout1", None), (None, b"stderr1"), (b"stdout2", b"stderr2"), (None, None)]
 
-        self.stdout_mock = Mock()
-        self.stderr_mock = Mock()
+        self.stdout_mock = Mock(spec=StreamWriter)
+        self.stderr_mock = Mock(spec=StreamWriter)
 
     def test_must_write_stdout_and_stderr_data(self):
         # All the invalid frames must be ignored
 
         Container._write_container_output(self.output_itr, stdout=self.stdout_mock, stderr=self.stderr_mock)
 
-        self.stdout_mock.write.assert_has_calls([call(b"stdout1"), call(b"stdout2")])
+        self.stdout_mock.write_str.assert_has_calls([call("stdout1"), call("stdout2")])
 
-        self.stderr_mock.write.assert_has_calls([call(b"stderr1"), call(b"stderr2")])
+        self.stderr_mock.write_str.assert_has_calls([call("stderr1"), call("stderr2")])
 
     def test_must_write_only_stderr(self):
         # All the invalid frames must be ignored
 
         Container._write_container_output(self.output_itr, stdout=None, stderr=self.stderr_mock)
 
-        self.stdout_mock.write.assert_not_called()
+        self.stdout_mock.write_str.assert_not_called()
 
-        self.stderr_mock.write.assert_has_calls([call(b"stderr1"), call(b"stderr2")])
+        self.stderr_mock.write_str.assert_has_calls([call("stderr1"), call("stderr2")])
 
     def test_must_write_only_stdout(self):
         Container._write_container_output(self.output_itr, stdout=self.stdout_mock, stderr=None)
 
-        self.stdout_mock.write.assert_has_calls([call(b"stdout1"), call(b"stdout2")])
+        self.stdout_mock.write_str.assert_has_calls([call("stdout1"), call("stdout2")])
 
-        self.stderr_mock.write.assert_not_called()  # stderr must never be called
+        self.stderr_mock.write_str.assert_not_called()  # stderr must never be called
 
 
 class TestContainer_wait_for_socket_connection(TestCase):
@@ -928,3 +1046,55 @@ class TestContainer_is_running(TestCase):
         real_container_mock.status = "running"
         self.mock_client.containers.get.return_value = real_container_mock
         self.assertTrue(self.container.is_created())
+
+
+class TestContainer_create_mapped_symlink_files(TestCase):
+    def setUp(self):
+        self.container = Container(Mock(), Mock(), Mock(), "host_dir", docker_client=Mock())
+
+        self.mock_symlinked_file = MagicMock()
+        self.mock_symlinked_file.is_symlink.return_value = True
+
+        self.mock_regular_file = MagicMock()
+        self.mock_regular_file.is_symlink.return_value = False
+
+    @patch("samcli.local.docker.container.pathlib.Path.exists")
+    @patch("samcli.local.docker.container.os.scandir")
+    def test_no_symlinks_returns_empty(self, mock_scandir, mock_exists):
+        mock_context = MagicMock()
+        mock_context.__enter__ = Mock(return_value=[self.mock_regular_file])
+        mock_scandir.return_value = mock_context
+        mock_exists.return_value = True
+
+        volumes = self.container._create_mapped_symlink_files()
+
+        self.assertEqual(volumes, {})
+
+    @patch("samcli.local.docker.container.pathlib.Path.exists")
+    def test_host_dir_does_not_exist_returns_empty_symlinks(self, mock_exists):
+        mock_exists.return_value = False
+        volumes = self.container._create_mapped_symlink_files()
+
+        self.assertEqual(volumes, {})
+
+    @patch("samcli.local.docker.container.os.scandir")
+    @patch("samcli.local.docker.container.os.path.basename")
+    @patch("samcli.local.docker.container.os.path.realpath")
+    @patch("samcli.local.docker.container.pathlib.Path")
+    def test_resolves_symlink(self, mock_path, mock_realpath, mock_basename, mock_scandir):
+        host_path = Mock()
+        container_path = Mock()
+
+        mock_realpath.return_value = host_path
+        mock_basename.return_value = "node_modules"
+        mock_as_posix = Mock()
+        mock_as_posix.as_posix = Mock(return_value=container_path)
+        mock_path.return_value = mock_as_posix
+
+        mock_context = MagicMock()
+        mock_context.__enter__ = Mock(return_value=[self.mock_symlinked_file])
+        mock_scandir.return_value = mock_context
+
+        volumes = self.container._create_mapped_symlink_files()
+
+        self.assertEqual(volumes, {host_path: {"bind": container_path, "mode": ANY}})

@@ -1,6 +1,7 @@
 """
 Class containing error conditions that are exposed to the user.
 """
+
 import traceback
 from typing import IO, Optional
 from urllib.parse import quote
@@ -150,4 +151,11 @@ class InvalidStackNameException(UserException):
 class LinterRuleMatchedException(UserException):
     """
     The linter matched a rule meaning that the template linting failed
+    """
+
+
+class PopularRuntimeNotFoundException(Exception):
+    """
+    Exception thrown when we were not able to parse the SUPPORTED_RUNTIMES
+    constant correctly for the latest runtime
     """

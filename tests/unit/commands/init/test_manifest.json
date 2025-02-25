@@ -1,7 +1,7 @@
 {
-    "dotnetcore3.1": [
+    "dotnet6": [
         {
-            "directory": "dotnetcore3.1/cookiecutter-aws-sam-hello-dotnet",
+            "directory": "dotnet6/cookiecutter-aws-sam-hello-dotnet",
             "displayName": "Hello World Example",
             "dependencyManager": "cli-package",
             "appTemplate": "hello-world",
@@ -19,9 +19,9 @@
             "useCaseName": "Hello World Example"
         }
     ],
-    "amazon/nodejs14.x-base": [
+    "amazon/nodejs20.x-base": [
         {
-            "directory": "nodejs14.x-image/cookiecutter-aws-sam-hello-nodejs-lambda-image",
+            "directory": "nodejs20.x-image/cookiecutter-aws-sam-hello-nodejs-lambda-image",
             "displayName": "Hello World Image Example",
             "dependencyManager": "npm",
             "appTemplate": "hello-world-lambda-image",

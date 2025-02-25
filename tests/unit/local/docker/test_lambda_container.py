@@ -4,34 +4,38 @@ Unit test for Lambda container management
 
 from unittest import TestCase
 from unittest.mock import patch, Mock
+
 from parameterized import parameterized, param
 
 from samcli.commands.local.lib.debug_context import DebugContext
 from samcli.lib.utils.packagetype import IMAGE, ZIP
-from samcli.local.docker.lambda_container import LambdaContainer, Runtime
+from samcli.local.docker.exceptions import InvalidRuntimeException
+from samcli.local.docker.lambda_container import LambdaContainer, Runtime, RIE_LOG_LEVEL_ENV_VAR
 from samcli.local.docker.lambda_debug_settings import DebuggingNotSupported
 from samcli.local.docker.lambda_image import RAPID_IMAGE_TAG_PREFIX
 
-RUNTIMES_WITH_ENTRYPOINT = [Runtime.dotnetcore31.value, Runtime.dotnet6.value, Runtime.go1x.value]
+RUNTIMES_WITH_ENTRYPOINT = [Runtime.dotnet6.value, Runtime.dotnet8.value, Runtime.go1x.value]
 
 RUNTIMES_WITH_BOOTSTRAP_ENTRYPOINT = [
-    Runtime.nodejs12x.value,
-    Runtime.nodejs14x.value,
     Runtime.nodejs16x.value,
     Runtime.nodejs18x.value,
-    Runtime.python37.value,
+    Runtime.nodejs20x.value,
+    Runtime.nodejs22x.value,
     Runtime.python38.value,
     Runtime.python39.value,
     Runtime.python310.value,
+    Runtime.python311.value,
+    Runtime.python312.value,
+    Runtime.python313.value,
     Runtime.dotnet6.value,
+    Runtime.dotnet8.value,
 ]
 
 RUNTIMES_WITH_DEBUG_ENV_VARS_ONLY = [
+    Runtime.java21.value,
     Runtime.java17.value,
     Runtime.java11.value,
-    Runtime.java8.value,
     Runtime.java8al2.value,
-    Runtime.dotnetcore31.value,
     Runtime.dotnet6.value,
     Runtime.go1x.value,
 ]
@@ -43,7 +47,7 @@ ALL_RUNTIMES = [r.value for r in Runtime]
 
 class TestLambdaContainer_init(TestCase):
     def setUp(self):
-        self.runtime = "nodejs12.x"
+        self.runtime = "nodejs20.x"
         self.handler = "handler"
         self.code_dir = "codedir"
         self.image_config = None
@@ -144,7 +148,7 @@ class TestLambdaContainer_init(TestCase):
         expected_cmd = ["mycommand"]
 
         get_image_mock.return_value = image
-        get_debug_settings_mock.return_value = (LambdaContainer._DEFAULT_ENTRYPOINT, {})
+        get_debug_settings_mock.return_value = (LambdaContainer._get_default_entry_point(), {})
         get_config_mock.return_value = {
             "Cmd": ["mycommand"],
             "Entrypoint": ["my-additional-entrypoint"],
@@ -178,7 +182,9 @@ class TestLambdaContainer_init(TestCase):
         self.assertEqual(get_config_mock()["WorkingDir"], container._working_dir)
         self.assertEqual(self.code_dir, container._host_dir)
         self.assertEqual(ports, container._exposed_ports)
-        self.assertEqual(LambdaContainer._DEFAULT_ENTRYPOINT + get_config_mock()["Entrypoint"], container._entrypoint)
+        self.assertEqual(
+            LambdaContainer._get_default_entry_point() + get_config_mock()["Entrypoint"], container._entrypoint
+        )
         self.assertEqual({**expected_env_vars, **{"AWS_LAMBDA_FUNCTION_HANDLER": "mycommand"}}, container._env_vars)
         self.assertEqual(self.memory_mb, container._memory_limit_mb)
 
@@ -253,7 +259,7 @@ class TestLambdaContainer_init(TestCase):
         self.assertEqual(ports, container._exposed_ports)
         # Dis-regard Entrypoint when debug args are present.
         self.assertEqual(
-            LambdaContainer._DEFAULT_ENTRYPOINT + self.debug_options.debug_args.split(" "), container._entrypoint
+            LambdaContainer._get_default_entry_point() + self.debug_options.debug_args.split(" "), container._entrypoint
         )
         self.assertEqual(expected_env_vars, container._env_vars)
         self.assertEqual(self.memory_mb, container._memory_limit_mb)
@@ -328,7 +334,7 @@ class TestLambdaContainer_init(TestCase):
         self.assertEqual(self.code_dir, container._host_dir)
         self.assertEqual(ports, container._exposed_ports)
         self.assertEqual(
-            LambdaContainer._DEFAULT_ENTRYPOINT + self.debug_options.debug_args.split(" "), container._entrypoint
+            LambdaContainer._get_default_entry_point() + self.debug_options.debug_args.split(" "), container._entrypoint
         )
         self.assertEqual(
             {**expected_env_vars, **{"AWS_LAMBDA_FUNCTION_HANDLER": "my-imageconfig-command"}}, container._env_vars
@@ -379,7 +385,7 @@ class TestLambdaContainer_init(TestCase):
             "WorkingDir": "/var/mytask",
         }
         get_exposed_ports_mock.return_value = ports
-        get_debug_settings_mock.return_value = (LambdaContainer._DEFAULT_ENTRYPOINT, {})
+        get_debug_settings_mock.return_value = (LambdaContainer._get_default_entry_point(), {})
         get_additional_options_mock.return_value = addtl_options
         get_additional_volumes_mock.return_value = addtl_volumes
         expected_env_vars = {**self.env_var}
@@ -408,7 +414,9 @@ class TestLambdaContainer_init(TestCase):
         self.assertEqual(self.code_dir, container._host_dir)
         self.assertEqual(ports, container._exposed_ports)
         self.assertEqual(
-            LambdaContainer._DEFAULT_ENTRYPOINT + self.image_config["EntryPoint"], container._entrypoint, "x86_64"
+            LambdaContainer._get_default_entry_point() + self.image_config["EntryPoint"],
+            container._entrypoint,
+            "x86_64",
         )
         self.assertEqual(
             {**expected_env_vars, **{"AWS_LAMBDA_FUNCTION_HANDLER": "my-imageconfig-command"}}, container._env_vars
@@ -427,7 +435,7 @@ class TestLambdaContainer_init(TestCase):
 
         image_builder_mock = Mock()
 
-        with self.assertRaises(ValueError) as context:
+        with self.assertRaises(InvalidRuntimeException) as context:
             LambdaContainer(
                 runtime=runtime,
                 imageuri=self.imageuri,
@@ -440,7 +448,27 @@ class TestLambdaContainer_init(TestCase):
                 architecture="x86_64",
             )
 
-        self.assertEqual(str(context.exception), "Unsupported Lambda runtime foo")
+        self.assertEqual(
+            str(context.exception),
+            "Unsupported Lambda runtime: foo. For a list of supported runtimes, please visit https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html",
+        )
+
+    @parameterized.expand(
+        [
+            (
+                None,
+                "error",
+            ),
+            (
+                "0",
+                "error",
+            ),
+            ("1", "debug"),
+        ]
+    )
+    def test_rie_debug_levels(self, rie_env_var, expected_log_level):
+        with patch("samcli.local.docker.lambda_container.os.environ", {RIE_LOG_LEVEL_ENV_VAR: rie_env_var}):
+            self.assertIn(expected_log_level, LambdaContainer._get_default_entry_point())
 
 
 class TestLambdaContainer_get_exposed_ports(TestCase):
@@ -505,7 +533,7 @@ class TestLambdaContainer_get_debug_settings(TestCase):
 
     def test_must_skip_if_debug_port_is_not_specified(self):
         self.assertEqual(
-            (LambdaContainer._DEFAULT_ENTRYPOINT, {}),
+            (LambdaContainer._get_default_entry_point(), {}),
             LambdaContainer._get_debug_settings("runtime", None),
             "Must not provide entrypoint if debug port is not given",
         )

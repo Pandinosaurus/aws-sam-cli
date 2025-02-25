@@ -1,13 +1,14 @@
 """
 Reads CLI arguments and performs necessary preparation to be able to run the function
 """
+
 import errno
 import json
 import logging
 import os
 from enum import Enum
 from pathlib import Path
-from typing import IO, Any, Dict, List, Optional, Tuple, Type, cast
+from typing import Any, Dict, List, Optional, TextIO, Tuple, Type, cast
 
 from samcli.commands._utils.template import TemplateFailedParsingException, TemplateNotFoundException
 from samcli.commands.exceptions import ContainersInitializationException
@@ -19,8 +20,10 @@ from samcli.lib.providers.sam_function_provider import RefreshableSamFunctionPro
 from samcli.lib.providers.sam_stack_provider import SamLocalStackProvider
 from samcli.lib.utils import osutils
 from samcli.lib.utils.async_utils import AsyncContext
+from samcli.lib.utils.boto_utils import get_boto_client_provider_with_config
 from samcli.lib.utils.packagetype import ZIP
 from samcli.lib.utils.stream_writer import StreamWriter
+from samcli.local.docker.exceptions import PortAlreadyInUse
 from samcli.local.docker.lambda_image import LambdaImage
 from samcli.local.docker.manager import ContainerManager
 from samcli.local.lambdafn.runtime import LambdaRuntime, WarmLambdaRuntime
@@ -96,7 +99,10 @@ class InvokeContext:
         shutdown: bool = False,
         container_host: Optional[str] = None,
         container_host_interface: Optional[str] = None,
+        add_host: Optional[dict] = None,
         invoke_images: Optional[str] = None,
+        mount_symlinks: Optional[bool] = False,
+        no_mem_limit: Optional[bool] = False,
     ) -> None:
         """
         Initialize the context
@@ -147,9 +153,14 @@ class InvokeContext:
             Optional. Host of locally emulated Lambda container
         container_host_interface string
             Optional. Interface that Docker host binds ports to
+        add_host dict
+            Optional. Docker extra hosts support from --add-host parameters
         invoke_images dict
             Optional. A dictionary that defines the custom invoke image URI of each function
+        mount_symlinks bool
+            Optional. Indicates if symlinks should be mounted inside the container
         """
+
         self._template_file = template_file
         self._function_identifier = function_identifier
         self._env_vars_file = env_vars_file
@@ -173,9 +184,13 @@ class InvokeContext:
         self._aws_region = aws_region
         self._aws_profile = aws_profile
         self._shutdown = shutdown
+        self._add_account_id_to_global()
 
         self._container_host = container_host
         self._container_host_interface = container_host_interface
+
+        self._extra_hosts: Optional[Dict] = add_host
+
         self._invoke_images = invoke_images
 
         self._containers_mode = ContainersMode.COLD
@@ -187,6 +202,9 @@ class InvokeContext:
 
         self._debug_function = debug_function
 
+        self._mount_symlinks: Optional[bool] = mount_symlinks
+        self._no_mem_limit = no_mem_limit
+
         # Note(xinhol): despite self._function_provider and self._stacks are initialized as None
         # they will be assigned with a non-None value in __enter__() and
         # it is only used in the context (after __enter__ is called)
@@ -195,7 +213,7 @@ class InvokeContext:
         self._stacks: List[Stack] = None  # type: ignore
         self._env_vars_value: Optional[Dict] = None
         self._container_env_vars_value: Optional[Dict] = None
-        self._log_file_handle: Optional[IO] = None
+        self._log_file_handle: Optional[TextIO] = None
         self._debug_context: Optional[DebugContext] = None
         self._layers_downloader: Optional[LayerDownloader] = None
         self._container_manager: Optional[ContainerManager] = None
@@ -303,7 +321,12 @@ class InvokeContext:
         def initialize_function_container(function: Function) -> None:
             function_config = self.local_lambda_runner.get_invoke_config(function)
             self.lambda_runtime.run(
-                None, function_config, self._debug_context, self._container_host, self._container_host_interface
+                container=None,
+                function_config=function_config,
+                debug_context=self._debug_context,
+                container_host=self._container_host,
+                container_host_interface=self._container_host_interface,
+                extra_hosts=self._extra_hosts,
             )
 
         try:
@@ -317,6 +340,8 @@ class InvokeContext:
             LOG.debug("Ctrl+C was pressed. Aborting containers initialization")
             self._clean_running_containers_and_related_resources()
             raise
+        except PortAlreadyInUse as port_inuse_ex:
+            raise port_inuse_ex
         except Exception as ex:
             LOG.error("Lambda functions containers initialization failed because of %s", ex)
             self._clean_running_containers_and_related_resources()
@@ -329,6 +354,25 @@ class InvokeContext:
         """
         cast(WarmLambdaRuntime, self.lambda_runtime).clean_running_containers_and_related_resources()
         cast(RefreshableSamFunctionProvider, self._function_provider).stop_observer()
+
+    def _add_account_id_to_global(self) -> None:
+        """
+        Attempts to get the Account ID from the current session
+        If there is no current session, the standard parameter override for
+        AWS::AccountId is used
+        """
+        client_provider = get_boto_client_provider_with_config(region=self._aws_region, profile=self._aws_profile)
+
+        sts = client_provider("sts")
+
+        try:
+            account_id = sts.get_caller_identity().get("Account")
+            if account_id:
+                if self._global_parameter_overrides is None:
+                    self._global_parameter_overrides = {}
+                self._global_parameter_overrides["AWS::AccountId"] = account_id
+        except Exception:
+            LOG.warning("No current session found, using default AWS::AccountId")
 
     @property
     def function_identifier(self) -> str:
@@ -366,10 +410,19 @@ class InvokeContext:
                 layer_downloader, self._skip_pull_image, self._force_image_build, invoke_images=self._invoke_images
             )
             self._lambda_runtimes = {
-                ContainersMode.WARM: WarmLambdaRuntime(self._container_manager, image_builder),
-                ContainersMode.COLD: LambdaRuntime(self._container_manager, image_builder),
+                ContainersMode.WARM: WarmLambdaRuntime(
+                    self._container_manager,
+                    image_builder,
+                    mount_symlinks=self._mount_symlinks,
+                    no_mem_limit=self._no_mem_limit,
+                ),
+                ContainersMode.COLD: LambdaRuntime(
+                    self._container_manager,
+                    image_builder,
+                    mount_symlinks=self._mount_symlinks,
+                    no_mem_limit=self._no_mem_limit,
+                ),
             }
-
         return self._lambda_runtimes[self._containers_mode]
 
     @property
@@ -383,16 +436,20 @@ class InvokeContext:
         if self._local_lambda_runner:
             return self._local_lambda_runner
 
+        real_path = str(os.path.dirname(os.path.abspath(self._template_file)))
+
         self._local_lambda_runner = LocalLambdaRunner(
             local_runtime=self.lambda_runtime,
             function_provider=self._function_provider,
             cwd=self.get_cwd(),
+            real_path=real_path,
             aws_profile=self._aws_profile,
             aws_region=self._aws_region,
             env_vars_values=self._env_vars_value,
             debug_context=self._debug_context,
             container_host=self._container_host,
             container_host_interface=self._container_host_interface,
+            extra_hosts=self._extra_hosts,
         )
         return self._local_lambda_runner
 
@@ -487,7 +544,7 @@ class InvokeContext:
             ) from ex
 
     @staticmethod
-    def _setup_log_file(log_file: Optional[str]) -> Optional[IO]:
+    def _setup_log_file(log_file: Optional[str]) -> Optional[TextIO]:
         """
         Open a log file if necessary and return the file handle. This will create a file if it does not exist
 
@@ -497,7 +554,7 @@ class InvokeContext:
         if not log_file:
             return None
 
-        return open(log_file, "wb")
+        return open(log_file, "w", encoding="utf8")
 
     @staticmethod
     def _get_debug_context(
