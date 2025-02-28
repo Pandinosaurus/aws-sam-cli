@@ -1,5 +1,6 @@
+import signal
 from unittest import TestCase
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, ANY
 
 from parameterized import parameterized, param
 
@@ -9,14 +10,14 @@ from samcli.local.services.base_local_service import BaseLocalService, LambdaOut
 class TestLocalHostRunner(TestCase):
     def test_runtime_error_raised_when_app_not_created(self):
         is_debugging = False
-        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1")
+        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1", ssl_context=None)
 
         with self.assertRaises(RuntimeError):
             service.run()
 
     def test_run_starts_service_multithreaded(self):
         is_debugging = False  # multithreaded
-        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1")
+        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1", ssl_context=None)
 
         service._app = Mock()
         app_run_mock = Mock()
@@ -24,11 +25,11 @@ class TestLocalHostRunner(TestCase):
 
         service.run()
 
-        app_run_mock.assert_called_once_with(threaded=True, host="127.0.0.1", port=3000)
+        app_run_mock.assert_called_once_with(threaded=True, host="127.0.0.1", port=3000, ssl_context=None)
 
     def test_run_starts_service_singlethreaded(self):
         is_debugging = True  # singlethreaded
-        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1")
+        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1", ssl_context=None)
 
         service._app = Mock()
         app_run_mock = Mock()
@@ -36,7 +37,7 @@ class TestLocalHostRunner(TestCase):
 
         service.run()
 
-        app_run_mock.assert_called_once_with(threaded=False, host="127.0.0.1", port=3000)
+        app_run_mock.assert_called_once_with(threaded=False, host="127.0.0.1", port=3000, ssl_context=None)
 
     @patch("samcli.local.services.base_local_service.Response")
     def test_service_response(self, flask_response_patch):
@@ -55,9 +56,23 @@ class TestLocalHostRunner(TestCase):
         self.assertEqual(actual_response.status_code, 200)
         self.assertEqual(actual_response.headers, {"Content-Type": "application/json"})
 
+    @patch("samcli.local.services.base_local_service.signal.signal")
+    def test_service_registers_sigterm_interrupt(self, signal_mock):
+        service = BaseLocalService(is_debugging=False, port=3000, host="127.0.0.1", ssl_context=None)
+
+        service._app = Mock()
+        app_run_mock = Mock()
+        service._app.run = app_run_mock
+
+        service.run()
+
+        signal_mock.assert_called_once_with(signal.SIGTERM, ANY)
+
+        app_run_mock.assert_called_once_with(threaded=True, host="127.0.0.1", port=3000, ssl_context=None)
+
     def test_create_returns_not_implemented(self):
         is_debugging = False
-        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1")
+        service = BaseLocalService(is_debugging=is_debugging, port=3000, host="127.0.0.1", ssl_context=None)
 
         with self.assertRaises(NotImplementedError):
             service.create()
@@ -66,17 +81,17 @@ class TestLocalHostRunner(TestCase):
 class TestLambdaOutputParser(TestCase):
     @parameterized.expand(
         [
-            param("with mixed data and json response", b'data\n{"a": "b"}', 'data\n{"a": "b"}'),
-            param("with response as string", b"response", "response"),
-            param("with json response only", b'{"a": "b"}', '{"a": "b"}'),
-            param("with one new line and json", b'\n{"a": "b"}', '\n{"a": "b"}'),
-            param("with response only as string", b"this is the response line", "this is the response line"),
-            param("with whitespaces", b'data\n{"a": "b"}  \n\n\n', 'data\n{"a": "b"}  \n\n\n'),
-            param("with empty data", b"", ""),
-            param("with just new lines", b"\n\n", "\n\n"),
+            param("with mixed data and json response", 'data\n{"a": "b"}', 'data\n{"a": "b"}'),
+            param("with response as string", "response", "response"),
+            param("with json response only", '{"a": "b"}', '{"a": "b"}'),
+            param("with one new line and json", '\n{"a": "b"}', '\n{"a": "b"}'),
+            param("with response only as string", "this is the response line", "this is the response line"),
+            param("with whitespaces", 'data\n{"a": "b"}  \n\n\n', 'data\n{"a": "b"}  \n\n\n'),
+            param("with empty data", "", ""),
+            param("with just new lines", "\n\n", "\n\n"),
             param(
                 "with whitespaces",
-                b"\n   \n   \n",
+                "\n   \n   \n",
                 "\n   \n   \n",
             ),
         ]

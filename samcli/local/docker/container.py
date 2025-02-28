@@ -1,30 +1,51 @@
 """
 Representation of a generic Docker container
 """
+
+import io
+import json
 import logging
 import os
 import pathlib
+import re
 import shutil
 import socket
 import tempfile
 import threading
 import time
-from typing import Optional
+from enum import Enum
+from typing import Dict, Iterator, Optional, Tuple, Union
 
 import docker
 import requests
-from docker.errors import NotFound as DockerNetworkNotFound
+from docker.errors import (
+    APIError as DockerAPIError,
+)
+from docker.errors import (
+    NotFound as DockerNetworkNotFound,
+)
 
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.utils.retry import retry
+from samcli.lib.utils.stream_writer import StreamWriter
 from samcli.lib.utils.tar import extract_tarfile
 from samcli.local.docker.effective_user import ROOT_USER_ID, EffectiveUser
-
-from .exceptions import ContainerNotStartableException
-from .utils import NoFreePortsError, find_free_port, to_posix_path
+from samcli.local.docker.exceptions import (
+    ContainerNotStartableException,
+    DockerContainerCreationFailedException,
+    PortAlreadyInUse,
+)
+from samcli.local.docker.utils import NoFreePortsError, find_free_port, to_posix_path
 
 LOG = logging.getLogger(__name__)
 
 CONTAINER_CONNECTION_TIMEOUT = float(os.environ.get("SAM_CLI_CONTAINER_CONNECTION_TIMEOUT", 20))
+DEFAULT_CONTAINER_HOST_INTERFACE = "127.0.0.1"
+
+# Keep a lock instance to access the locks for individual containers (see dict below)
+CONCURRENT_CALL_MANAGER_LOCK = threading.Lock()
+# Keeps locks per container (aka per function) so that one function can be invoked one at a time
+CONCURRENT_CALL_MANAGER: Dict[str, threading.Lock] = {}
 
 
 class ContainerResponseException(Exception):
@@ -37,6 +58,11 @@ class ContainerConnectionTimeoutException(Exception):
     """
     Exception raised when timeout was reached while attempting to establish a connection to a container.
     """
+
+
+class ContainerContext(Enum):
+    BUILD = "build"
+    INVOKE = "invoke"
 
 
 class Container:
@@ -71,9 +97,11 @@ class Container:
         container_opts=None,
         additional_volumes=None,
         container_host="localhost",
-        container_host_interface="127.0.0.1",
+        container_host_interface=DEFAULT_CONTAINER_HOST_INTERFACE,
         mount_with_write: bool = False,
         host_tmp_dir: Optional[str] = None,
+        extra_hosts: Optional[dict] = None,
+        mount_symlinks: Optional[bool] = False,
     ):
         """
         Initializes the class with given configuration. This does not automatically create or run the container.
@@ -95,6 +123,8 @@ class Container:
         :param bool mount_with_write: Optional. Mount source code directory with write permissions when
             building on container
         :param string host_tmp_dir: Optional. Temporary directory on the host when mounting with write permissions.
+        :param dict extra_hosts: Optional. Dict of hostname to IP resolutions
+        :param bool mount_symlinks: Optional. True if symlinks should be mounted in the container
         """
 
         self._image = image
@@ -109,12 +139,14 @@ class Container:
         self._container_opts = container_opts
         self._additional_volumes = additional_volumes
         self._logs_thread = None
+        self._extra_hosts = extra_hosts
+        self._logs_thread_event = None
 
         # Use the given Docker client or create new one
-        self.docker_client = docker_client or docker.from_env()
+        self.docker_client = docker_client or docker.from_env(version=DOCKER_MIN_API_VERSION)
 
         # Runtime properties of the container. They won't have value until container is created or started
-        self.id = None
+        self.id: Optional[str] = None
 
         # aws-lambda-rie defaults to 8080 as the port, however that's a common port. A port is chosen by
         # selecting the first free port in a range that's not ephemeral.
@@ -125,16 +157,22 @@ class Container:
         self._container_host_interface = container_host_interface
         self._mount_with_write = mount_with_write
         self._host_tmp_dir = host_tmp_dir
+        self._mount_symlinks = mount_symlinks
 
         try:
-            self.rapid_port_host = find_free_port(start=self._start_port_range, end=self._end_port_range)
+            self.rapid_port_host = find_free_port(
+                network_interface=self._container_host_interface, start=self._start_port_range, end=self._end_port_range
+            )
         except NoFreePortsError as ex:
             raise ContainerNotStartableException(str(ex)) from ex
 
-    def create(self):
+    def create(self, context):
         """
         Calls Docker API to creates the Docker container instance. Creating the container does *not* run the container.
         Use ``start`` method to run the container
+
+        context: samcli.local.docker.container.ContainerContext
+            Context for the container management to run (build, invoke)
 
         :return string: ID of the created container
         :raise RuntimeError: If this method is called after a container already has been created
@@ -148,6 +186,10 @@ class Container:
         if self._host_dir:
             mount_mode = "rw,delegated" if self._mount_with_write else "ro,delegated"
             LOG.info("Mounting %s as %s:%s, inside runtime container", self._host_dir, self._working_dir, mount_mode)
+            if self._resolve_symlinks_in_context(context) or self._mount_symlinks:
+                mapped_symlinks = self._create_mapped_symlink_files()
+            else:
+                mapped_symlinks = {}
 
             _volumes = {
                 self._host_dir: {
@@ -155,7 +197,8 @@ class Container:
                     # https://docs.docker.com/storage/bind-mounts
                     "bind": self._working_dir,
                     "mode": mount_mode,
-                }
+                },
+                **mapped_symlinks,
             }
 
         kwargs = {
@@ -206,13 +249,19 @@ class Container:
             # Ex: 128m => 128MB
             kwargs["mem_limit"] = "{}m".format(self._memory_limit_mb)
 
-        if self.network_id == "host":
-            kwargs["network_mode"] = self.network_id
+        if self._extra_hosts:
+            kwargs["extra_hosts"] = self._extra_hosts
 
-        real_container = self.docker_client.containers.create(self._image, **kwargs)
+        try:
+            real_container = self.docker_client.containers.create(self._image, **kwargs)
+        except DockerAPIError as ex:
+            raise DockerContainerCreationFailedException(
+                f"Container creation failed: {ex.explanation}, check template for potential issue"
+            )
         self.id = real_container.id
 
         self._logs_thread = None
+        self._logs_thread_event = None
 
         if self.network_id and self.network_id != "host":
             try:
@@ -224,6 +273,52 @@ class Container:
                 raise
 
         return self.id
+
+    def _create_mapped_symlink_files(self) -> Dict[str, Dict[str, str]]:
+        """
+        Resolves top level symlinked files and folders that are found on the
+        host directory and creates additional bind mounts to correctly map them
+        inside of the container.
+        By default only `node_modules` are mounted unless self.mount_symlinks is True
+
+        Returns
+        -------
+        Dict[str, Dict[str, str]]
+            A dictonary representing the resolved file or directory and the bound path
+            on the container
+        """
+
+        mount_mode = "ro,delegated"
+        additional_volumes: Dict[str, Dict[str, str]] = {}
+
+        if not pathlib.Path(self._host_dir).exists():
+            LOG.debug("Host directory not found, skip resolving symlinks")
+            return additional_volumes
+
+        with os.scandir(self._host_dir) as directory_iterator:
+            for file in directory_iterator:
+                if not file.is_symlink():
+                    continue
+                host_resolved_path = os.path.realpath(file.path)
+                if not self._resolve_symlinks_for_file(file) and not self._mount_symlinks:
+                    LOG.info(
+                        "Not mounting symlink (%s -> %s) by default. "
+                        "Use --mount-symlinks to always mount symlinks in the container"
+                        % (file.path, host_resolved_path)
+                    )
+                    continue
+                container_full_path = pathlib.Path(self._working_dir, file.name).as_posix()
+                additional_volumes[host_resolved_path] = {
+                    "bind": container_full_path,
+                    "mode": mount_mode,
+                }
+
+                LOG.info(
+                    "Mounting resolved symlink (%s -> %s) as %s:%s, inside runtime container"
+                    % (file.path, host_resolved_path, container_full_path, mount_mode)
+                )
+
+        return additional_volumes
 
     def stop(self, timeout=3):
         """
@@ -312,21 +407,44 @@ class Container:
         # Get the underlying container instance from Docker API
         real_container = self.docker_client.containers.get(self.id)
 
-        # Start the container
-        real_container.start()
+        try:
+            # Start the container
+            real_container.start()
+        except docker.errors.APIError as ex:
+            if "Ports are not available" in str(ex):
+                raise PortAlreadyInUse(ex.explanation.decode()) from ex
+            raise ex
 
     @retry(exc=requests.exceptions.RequestException, exc_raise=ContainerResponseException)
-    def wait_for_http_response(self, name, event, stdout):
+    def wait_for_http_response(self, name, event, stdout) -> Tuple[Union[str, bytes], bool]:
         # TODO(sriram-mv): `aws-lambda-rie` is in a mode where the function_name is always "function"
         # NOTE(sriram-mv): There is a connection timeout set on the http call to `aws-lambda-rie`, however there is not
         # a read time out for the response received from the server.
 
-        resp = requests.post(
-            self.URL.format(host=self._container_host, port=self.rapid_port_host, function_name="function"),
-            data=event.encode("utf-8"),
-            timeout=(self.RAPID_CONNECTION_TIMEOUT, None),
-        )
-        stdout.write(resp.content)
+        # generate a lock key with host-port combination which is unique per function
+        lock_key = f"{self._container_host}-{self.rapid_port_host}"
+        LOG.debug("Getting lock for the key %s", lock_key)
+        with CONCURRENT_CALL_MANAGER_LOCK:
+            lock = CONCURRENT_CALL_MANAGER.get(lock_key)
+            if not lock:
+                lock = threading.Lock()
+                CONCURRENT_CALL_MANAGER[lock_key] = lock
+        LOG.debug("Waiting to retrieve the lock (%s) to start invocation", lock_key)
+        with lock:
+            resp = requests.post(
+                self.URL.format(host=self._container_host, port=self.rapid_port_host, function_name="function"),
+                data=event.encode("utf-8"),
+                timeout=(self.RAPID_CONNECTION_TIMEOUT, None),
+            )
+
+        try:
+            # if response is an image then json.loads/dumps will throw a UnicodeDecodeError so return raw content
+            if resp.headers.get("Content-Type") and "image" in resp.headers["Content-Type"]:
+                return resp.content, True
+            return json.dumps(json.loads(resp.content), ensure_ascii=False), False
+        except json.JSONDecodeError:
+            LOG.debug("Failed to deserialize response from RIE, returning the raw response as is")
+            return resp.content, False
 
     def wait_for_result(self, full_path, event, stdout, stderr, start_timer=None):
         # NOTE(sriram-mv): Let logging happen in its own thread, so that a http request can be sent.
@@ -336,7 +454,10 @@ class Container:
         # the log thread will not be closed until the container itself got deleted,
         # so as long as the container is still there, no need to start a new log thread
         if not self._logs_thread or not self._logs_thread.is_alive():
-            self._logs_thread = threading.Thread(target=self.wait_for_logs, args=(stderr, stderr), daemon=True)
+            self._logs_thread_event = self._create_threading_event()
+            self._logs_thread = threading.Thread(
+                target=self.wait_for_logs, args=(stderr, stderr, self._logs_thread_event), daemon=True
+            )
             self._logs_thread.start()
 
         # wait_for_http_response will attempt to establish a connection to the socket
@@ -346,11 +467,28 @@ class Container:
         # start the timer for function timeout right before executing the function, as waiting for the socket
         # can take some time
         timer = start_timer() if start_timer else None
-        self.wait_for_http_response(full_path, event, stdout)
+        response, is_image = self.wait_for_http_response(full_path, event, stdout)
         if timer:
             timer.cancel()
 
-    def wait_for_logs(self, stdout=None, stderr=None):
+        self._logs_thread_event.wait(timeout=1)
+        if isinstance(response, str):
+            stdout.write_str(response)
+        elif isinstance(response, bytes) and is_image:
+            stdout.write_bytes(response)
+        elif isinstance(response, bytes):
+            stdout.write_str(response.decode("utf-8"))
+        stdout.flush()
+        stderr.write_str("\n")
+        stderr.flush()
+        self._logs_thread_event.clear()
+
+    def wait_for_logs(
+        self,
+        stdout: Optional[Union[StreamWriter, io.BytesIO, io.TextIOWrapper]] = None,
+        stderr: Optional[Union[StreamWriter, io.BytesIO, io.TextIOWrapper]] = None,
+        event: Optional[threading.Event] = None,
+    ):
         # Return instantly if we don't have to fetch any logs
         if not stdout and not stderr:
             return
@@ -362,8 +500,7 @@ class Container:
 
         # Fetch both stdout and stderr streams from Docker as a single iterator.
         logs_itr = real_container.attach(stream=True, logs=True, demux=True)
-
-        self._write_container_output(logs_itr, stdout=stdout, stderr=stderr)
+        self._write_container_output(logs_itr, event=event, stdout=stdout, stderr=stderr)
 
     def _wait_for_socket_connection(self) -> None:
         """
@@ -413,7 +550,12 @@ class Container:
             extract_tarfile(file_obj=fp, unpack_dir=to_host_path)
 
     @staticmethod
-    def _write_container_output(output_itr, stdout=None, stderr=None):
+    def _write_container_output(
+        output_itr: Iterator[Tuple[bytes, bytes]],
+        stdout: Optional[Union[StreamWriter, io.BytesIO, io.TextIOWrapper]] = None,
+        stderr: Optional[Union[StreamWriter, io.BytesIO, io.TextIOWrapper]] = None,
+        event: Optional[threading.Event] = None,
+    ):
         """
         Based on the data returned from the Container output, via the iterator, write it to the appropriate streams
 
@@ -432,12 +574,45 @@ class Container:
             # Iterator returns a tuple of (stdout, stderr)
             for stdout_data, stderr_data in output_itr:
                 if stdout_data and stdout:
-                    stdout.write(stdout_data)
+                    Container._handle_data_writing(stdout, stdout_data, event)
 
                 if stderr_data and stderr:
-                    stderr.write(stderr_data)
+                    Container._handle_data_writing(stderr, stderr_data, event)
         except Exception as ex:
             LOG.debug("Failed to get the logs from the container", exc_info=ex)
+
+    @staticmethod
+    def _handle_data_writing(
+        output_stream: Union[StreamWriter, io.BytesIO, io.TextIOWrapper],
+        output_data: bytes,
+        event: Optional[threading.Event],
+    ):
+        # Decode the output and strip the string of carriage return characters. Stack traces are returned
+        # with carriage returns from the RIE. If these are left in the string then only the last line after
+        # the carriage return will be printed instead of the entire stack trace. Encode the string after cleaning
+        # to be printed by the correct output stream
+        output_str = output_data.decode("utf-8").replace("\r", os.linesep)
+        pattern = r"(.*\s)?REPORT RequestId:\s.+ Duration:\s.+\sMemory Size:\s.+\sMax Memory Used:\s.+"
+        if isinstance(output_stream, StreamWriter):
+            output_stream.write_str(output_str)
+            output_stream.flush()
+
+        if isinstance(output_stream, io.BytesIO):
+            output_stream.write(output_str.encode("utf-8"))
+
+        if isinstance(output_stream, io.TextIOWrapper):
+            output_stream.buffer.write(output_str.encode("utf-8"))
+        if re.match(pattern, output_str) is not None and event:
+            event.set()
+
+    # This method exists because otherwise when writing tests patching/mocking threading.Event breaks everything
+    # this allows for the tests to exist as they do currently without any major refactoring
+    @staticmethod
+    def _create_threading_event():
+        """
+        returns a new threading.Event object.
+        """
+        return threading.Event()
 
     @property
     def network_id(self):
@@ -496,3 +671,36 @@ class Container:
             return real_container.status == "running"
         except docker.errors.NotFound:
             return False
+
+    def _resolve_symlinks_in_context(self, context) -> bool:
+        """
+
+        Parameters
+        ----------
+        context : samcli.local.docker.container.ContainerContext
+            Context for the container management to run. (build, invoke)
+
+        Returns
+        -------
+        bool
+            True, if given these parameters it should resolve symlinks or not
+        """
+        return bool(context != ContainerContext.BUILD)
+
+    def _resolve_symlinks_for_file(self, file: os.DirEntry) -> bool:
+        """
+
+        Parameters
+        ----------
+        file : os.DirEntry
+           File to check if it should be resolved
+
+        Returns
+        -------
+        bool
+            True if the file should be resolved as a symlink to mount in the container.
+            By default, the only symlinks resolved are `node_modules` used by build-in-source
+        """
+        resolved_path = os.path.realpath(file.path)  # resolved symlink
+        resolved_name = os.path.basename(resolved_path)
+        return bool(resolved_name == "node_modules")

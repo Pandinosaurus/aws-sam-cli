@@ -1,6 +1,7 @@
 """
 Utilities involved in Packaging.
 """
+
 import contextlib
 import functools
 import logging
@@ -26,6 +27,7 @@ from samcli.lib.package.permissions import (
 from samcli.lib.package.s3_uploader import S3Uploader
 from samcli.lib.utils.hash import dir_checksum
 from samcli.lib.utils.resources import LAMBDA_LOCAL_RESOURCES
+from samcli.lib.utils.s3 import parse_s3_url
 
 LOG = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ def is_path_value_valid(path):
     return isinstance(path, str)
 
 
-def make_abs_path(directory, path):
+def make_abs_path(directory: str, path: str) -> str:
     if is_path_value_valid(path) and not os.path.isabs(path):
         return os.path.normpath(os.path.join(directory, path))
     return path
@@ -68,7 +70,7 @@ def is_s3_protocol_url(url):
     Check whether url is a valid path in the form of "s3://..."
     """
     try:
-        S3Uploader.parse_s3_url(url)
+        parse_s3_url(url)
         return True
     except ValueError:
         return False
@@ -123,6 +125,10 @@ def upload_local_image_artifacts(resource_id, resource_dict, property_name, pare
         LOG.debug("Property %s of %s is already an ECR URL", property_name, resource_id)
         return image_path
 
+    possible_image_archive_path = make_abs_path(parent_dir, image_path)
+    if is_local_file(possible_image_archive_path):
+        image_path = possible_image_archive_path
+
     return uploader.upload(image_path, resource_id)
 
 
@@ -130,10 +136,11 @@ def upload_local_artifacts(
     resource_type: str,
     resource_id: str,
     resource_dict: Dict,
-    property_name: str,
+    property_path: str,
     parent_dir: str,
     uploader: S3Uploader,
     extension: Optional[str] = None,
+    local_path: Optional[str] = None,
 ) -> str:
     """
     Upload local artifacts referenced by the property at given resource and
@@ -150,28 +157,28 @@ def upload_local_artifacts(
     :param resource_type:   Type of the CloudFormation resource
     :param resource_id:     Id of the CloudFormation resource
     :param resource_dict:   Dictionary containing resource definition
-    :param property_name:   Property name of CloudFormation resource where this
+    :param property_path:   Json path to the property of SAM or CloudFormation resource where the
                             local path is present
     :param parent_dir:      Resolve all relative paths with respect to this
                             directory
     :param uploader:        Method to upload files to S3
     :param extension:       Extension of the uploaded artifact
+    :param local_path:      Local path for the cases when search return more than single result
     :return:                S3 URL of the uploaded object
     :raise:                 ValueError if path is not a S3 URL or a local path
     """
 
-    local_path = jmespath.search(property_name, resource_dict)
-
     if local_path is None:
-        # Build the root directory and upload to S3
-        local_path = parent_dir
+        # if local_path is not passed and search returns nothing
+        # build the root directory and upload to S3
+        local_path = jmespath.search(property_path, resource_dict) or parent_dir
 
     if is_s3_protocol_url(local_path):
         # A valid CloudFormation template will specify artifacts as S3 URLs.
         # This check is supporting the case where your resource does not
         # refer to local artifacts
         # Nothing to do if property value is an S3 URL
-        LOG.debug("Property %s of %s is already a S3 URL", property_name, resource_id)
+        LOG.debug("Property %s of %s is already a S3 URL", property_path, resource_id)
         return cast(str, local_path)
 
     local_path = make_abs_path(parent_dir, local_path)
@@ -189,7 +196,7 @@ def upload_local_artifacts(
     if is_local_file(local_path):
         return uploader.upload_with_dedup(local_path)
 
-    raise InvalidLocalPathError(resource_id=resource_id, property_name=property_name, local_path=local_path)
+    raise InvalidLocalPathError(resource_id=resource_id, property_name=property_path, local_path=local_path)
 
 
 def resource_not_packageable(resource_dict):

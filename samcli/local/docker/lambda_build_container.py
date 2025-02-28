@@ -10,9 +10,21 @@ from typing import List
 from uuid import uuid4
 
 from samcli.commands._utils.experimental import get_enabled_experimental_flags
+from samcli.commands.exceptions import UserException
+from samcli.lib.build.utils import valid_architecture
+from samcli.lib.utils.architecture import ARM64, X86_64
+from samcli.lib.utils.lambda_builders import patch_runtime
 from samcli.local.docker.container import Container
 
 LOG = logging.getLogger(__name__)
+
+
+class InvalidArchitectureForImage(UserException):
+    """
+    Raised when architecture that is provided for the image is invalid
+    """
+
+    pass
 
 
 class LambdaBuildContainer(Container):
@@ -48,6 +60,7 @@ class LambdaBuildContainer(Container):
         build_in_source=None,
         mount_with_write: bool = False,
         build_dir=None,
+        mount_symlinks=False,
     ):
         abs_manifest_path = pathlib.Path(manifest_path).resolve()
         manifest_file_name = abs_manifest_path.name
@@ -121,6 +134,7 @@ class LambdaBuildContainer(Container):
             env_vars=env_vars,
             mount_with_write=mount_with_write,
             host_tmp_dir=host_tmp_dir,
+            mount_symlinks=mount_symlinks,
         )
 
     @property
@@ -144,7 +158,7 @@ class LambdaBuildContainer(Container):
         is_building_layer,
         build_in_source,
     ):
-        runtime = runtime.replace(".al2", "")
+        runtime = patch_runtime(runtime)
 
         return json.dumps(
             {
@@ -297,4 +311,8 @@ class LambdaBuildContainer(Container):
         str
             Image tag
         """
+        if not valid_architecture(architecture):
+            raise InvalidArchitectureForImage(
+                f"'{architecture}' is not a valid architecture, it should be either '{X86_64}' or '{ARM64}'"
+            )
         return f"{LambdaBuildContainer._IMAGE_TAG}-{architecture}"

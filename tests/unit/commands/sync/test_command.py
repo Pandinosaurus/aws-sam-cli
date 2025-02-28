@@ -57,6 +57,8 @@ class TestDoCli(TestCase):
         self.clean = True
         self.config_env = "mock-default-env"
         self.config_file = "mock-default-filename"
+        self.build_image = None
+        self.container_env_var_file = "file"
         MOCK_SAM_CONFIG.reset_mock()
 
     @parameterized.expand(
@@ -68,7 +70,7 @@ class TestDoCli(TestCase):
             (False, False, False, False, True, InfraSyncResult(True)),
         ]
     )
-    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})
+    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})  # type: ignore
     @patch("samcli.commands.sync.command.click")
     @patch("samcli.commands.sync.command.execute_code_sync")
     @patch("samcli.commands.build.command.click")
@@ -141,9 +143,12 @@ class TestDoCli(TestCase):
             self.tags,
             self.metadata,
             use_container,
+            self.container_env_var_file,
+            self.build_image,
             self.config_file,
             self.config_env,
             build_in_source=False,
+            watch_exclude={},
         )
 
         if use_container and auto_dependency_layer:
@@ -158,6 +163,7 @@ class TestDoCli(TestCase):
             cache_dir=DEFAULT_CACHE_DIR,
             clean=True,
             use_container=use_container,
+            container_env_var_file=self.container_env_var_file,
             parallel=True,
             parameter_overrides=self.parameter_overrides,
             mode=self.mode,
@@ -167,6 +173,7 @@ class TestDoCli(TestCase):
             print_success_message=False,
             locate_layer_nested=True,
             build_in_source=False,
+            build_images={},
         )
 
         PackageContextMock.assert_called_with(
@@ -210,6 +217,7 @@ class TestDoCli(TestCase):
             disable_rollback=False,
             poll_delay=10,
             on_failure=None,
+            max_wait_duration=60,
         )
 
         execute_infra_mock.assert_called_with(
@@ -298,9 +306,12 @@ class TestDoCli(TestCase):
             self.tags,
             self.metadata,
             use_container,
+            self.container_env_var_file,
+            self.build_image,
             self.config_file,
             self.config_env,
             build_in_source=False,
+            watch_exclude={},
         )
 
         BuildContextMock.assert_called_with(
@@ -311,6 +322,7 @@ class TestDoCli(TestCase):
             cache_dir=DEFAULT_CACHE_DIR,
             clean=True,
             use_container=use_container,
+            container_env_var_file=self.container_env_var_file,
             parallel=True,
             parameter_overrides=self.parameter_overrides,
             mode=self.mode,
@@ -320,6 +332,7 @@ class TestDoCli(TestCase):
             print_success_message=False,
             locate_layer_nested=True,
             build_in_source=False,
+            build_images={},
         )
 
         PackageContextMock.assert_called_with(
@@ -363,6 +376,7 @@ class TestDoCli(TestCase):
             disable_rollback=False,
             poll_delay=0.5,
             on_failure=None,
+            max_wait_duration=60,
         )
         execute_watch_mock.assert_called_once_with(
             template=self.template_file,
@@ -372,6 +386,7 @@ class TestDoCli(TestCase):
             sync_context=sync_context_mock,
             auto_dependency_layer=auto_dependency_layer,
             disable_infra_syncs=disable_infra_syncs,
+            watch_exclude={},
         )
 
     @parameterized.expand([(True, False, True, True, False), (True, False, False, False, True)])
@@ -443,9 +458,12 @@ class TestDoCli(TestCase):
             self.tags,
             self.metadata,
             use_container,
+            self.container_env_var_file,
+            self.build_image,
             self.config_file,
             self.config_env,
             build_in_source=None,
+            watch_exclude={},
         )
         execute_code_sync_mock.assert_called_once_with(
             template=self.template_file,
@@ -781,6 +799,7 @@ class TestWatch(TestCase):
             self.sync_context,
             auto_dependency_layer,
             disable_infra_syncs,
+            {},
         )
 
         watch_manager_mock.assert_called_once_with(
@@ -791,6 +810,7 @@ class TestWatch(TestCase):
             self.sync_context,
             auto_dependency_layer,
             disable_infra_syncs,
+            {},
         )
         watch_manager_mock.return_value.start.assert_called_once_with()
 
@@ -803,6 +823,7 @@ class TestDisableADL(TestCase):
                     "test": {
                         "Properties": {
                             "Environment": {"Variables": {"NODE_OPTIONS": ["--something"]}},
+                            "Handler": "FakeHandler",
                         },
                         "Metadata": {"BuildMethod": "esbuild", "BuildProperties": {"Sourcemap": True}},
                         "Type": "AWS::Serverless::Function",
@@ -815,6 +836,7 @@ class TestDisableADL(TestCase):
                     "test": {
                         "Properties": {
                             "Environment": {"Variables": {"NODE_OPTIONS": ["--something"]}},
+                            "Handler": "FakeHandler",
                         },
                         "Type": "AWS::Serverless::Function",
                     }

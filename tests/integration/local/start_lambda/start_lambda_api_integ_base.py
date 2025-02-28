@@ -10,6 +10,7 @@ from pathlib import Path
 
 import docker
 from docker.errors import APIError
+from psutil import NoSuchProcess
 
 from tests.integration.local.common_utils import random_port, InvalidAddressException, wait_for_local_process
 from tests.testing_utils import (
@@ -32,6 +33,7 @@ class StartLambdaIntegBaseClass(TestCase):
     integration_dir = str(Path(__file__).resolve().parents[2])
     invoke_image: Optional[List] = None
     hook_name: Optional[str] = None
+    terraform_plan_file: Optional[str] = None
     beta_features: Optional[bool] = None
     collect_start_lambda_process_output: bool = False
 
@@ -101,6 +103,7 @@ class StartLambdaIntegBaseClass(TestCase):
         invoke_image=None,
         hook_name=None,
         beta_features=None,
+        terraform_plan_file=None,
     ):
         command_list = [get_sam_command(), "local", "start-lambda"]
 
@@ -129,6 +132,9 @@ class StartLambdaIntegBaseClass(TestCase):
         if beta_features is not None:
             command_list += ["--beta-features" if beta_features else "--no-beta-features"]
 
+        if terraform_plan_file:
+            command_list += ["--terraform-plan-file", terraform_plan_file]
+
         return command_list
 
     @classmethod
@@ -142,6 +148,7 @@ class StartLambdaIntegBaseClass(TestCase):
             invoke_image=cls.invoke_image,
             hook_name=cls.hook_name,
             beta_features=cls.beta_features,
+            terraform_plan_file=cls.terraform_plan_file,
         )
 
         cls.start_lambda_process = Popen(command_list, stderr=PIPE, stdin=PIPE, env=env, cwd=cls.working_dir)
@@ -172,7 +179,10 @@ class StartLambdaIntegBaseClass(TestCase):
     def tearDownClass(cls):
         # After all the tests run, we need to kill the start_lambda process.
         cls.stop_reading_thread = True
-        kill_process(cls.start_lambda_process)
+        try:
+            kill_process(cls.start_lambda_process)
+        except NoSuchProcess:
+            LOG.info("Process has already been terminated")
 
 
 class WatchWarmContainersIntegBaseClass(StartLambdaIntegBaseClass):

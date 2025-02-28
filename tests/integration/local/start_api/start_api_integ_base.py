@@ -10,6 +10,7 @@ from pathlib import Path
 
 import docker
 from docker.errors import APIError
+from psutil import NoSuchProcess
 
 from tests.integration.local.common_utils import InvalidAddressException, random_port, wait_for_local_process
 from tests.testing_utils import kill_process, get_sam_command
@@ -27,11 +28,16 @@ class StartApiIntegBaseClass(TestCase):
     integration_dir = str(Path(__file__).resolve().parents[2])
     invoke_image: Optional[List] = None
     layer_cache_base_dir: Optional[str] = None
+    disable_authorizer: Optional[bool] = False
+    config_file: Optional[str] = None
 
     build_before_invoke = False
     build_overrides: Optional[Dict[str, str]] = None
 
     do_collect_cmd_init_output: bool = False
+
+    command_list = None
+    project_directory = None
 
     @classmethod
     def setUpClass(cls):
@@ -84,7 +90,8 @@ class StartApiIntegBaseClass(TestCase):
     def start_api(cls):
         command = get_sam_command()
 
-        command_list = [command, "local", "start-api", "-t", cls.template, "-p", cls.port]
+        command_list = cls.command_list or [command, "local", "start-api", "-t", cls.template]
+        command_list.extend(["-p", cls.port])
 
         if cls.container_mode:
             command_list += ["--warm-containers", cls.container_mode]
@@ -99,7 +106,17 @@ class StartApiIntegBaseClass(TestCase):
             for image in cls.invoke_image:
                 command_list += ["--invoke-image", image]
 
-        cls.start_api_process = Popen(command_list, stderr=PIPE, stdout=PIPE)
+        if cls.disable_authorizer:
+            command_list += ["--disable-authorizer"]
+
+        if cls.config_file:
+            command_list += ["--config-file", cls.config_file]
+
+        cls.start_api_process = (
+            Popen(command_list, stderr=PIPE, stdout=PIPE)
+            if not cls.project_directory
+            else Popen(command_list, stderr=PIPE, stdout=PIPE, cwd=cls.project_directory)
+        )
         cls.start_api_process_output = wait_for_local_process(
             cls.start_api_process, cls.port, collect_output=cls.do_collect_cmd_init_output
         )
@@ -108,10 +125,18 @@ class StartApiIntegBaseClass(TestCase):
 
         def read_sub_process_stderr():
             while not cls.stop_reading_thread:
-                cls.start_api_process.stderr.readline()
+                line = cls.start_api_process.stderr.readline()
+                LOG.info(line)
+
+        def read_sub_process_stdout():
+            while not cls.stop_reading_thread:
+                LOG.info(cls.start_api_process.stdout.readline())
 
         cls.read_threading = threading.Thread(target=read_sub_process_stderr, daemon=True)
         cls.read_threading.start()
+
+        cls.read_threading2 = threading.Thread(target=read_sub_process_stdout, daemon=True)
+        cls.read_threading2.start()
 
     @classmethod
     def _make_parameter_override_arg(self, overrides):
@@ -121,7 +146,10 @@ class StartApiIntegBaseClass(TestCase):
     def tearDownClass(cls):
         # After all the tests run, we need to kill the start-api process.
         cls.stop_reading_thread = True
-        kill_process(cls.start_api_process)
+        try:
+            kill_process(cls.start_api_process)
+        except NoSuchProcess:
+            LOG.info("Process has already been terminated")
 
     @staticmethod
     def get_binary_data(filename):

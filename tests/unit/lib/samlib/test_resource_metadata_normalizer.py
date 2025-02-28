@@ -3,6 +3,7 @@ from parameterized import parameterized
 from unittest import TestCase
 
 from samcli.lib.samlib.resource_metadata_normalizer import ResourceMetadataNormalizer
+from samcli.yamlhelper import yaml_parse
 
 
 class TestResourceMetadataNormalizer(TestCase):
@@ -108,7 +109,7 @@ class TestResourceMetadataNormalizer(TestCase):
         self.assertEqual(
             expected_docker_context_path, template_data["Resources"]["Function1"]["Metadata"]["DockerContext"]
         )
-        expected_dockerfile_path = str(pathlib.Path("path", "to", "Dockerfile"))
+        expected_dockerfile_path = str(pathlib.Path("path", "to", "Dockerfile").as_posix())
         self.assertEqual(expected_dockerfile_path, template_data["Resources"]["Function1"]["Metadata"]["Dockerfile"])
         self.assertEqual(docker_build_args, template_data["Resources"]["Function1"]["Metadata"]["DockerBuildArgs"])
         self.assertEqual("Function1", template_data["Resources"]["Function1"]["Metadata"]["SamResourceId"])
@@ -145,7 +146,7 @@ class TestResourceMetadataNormalizer(TestCase):
             expected_docker_context_path, template_data["Resources"]["Function1"]["Metadata"]["DockerContext"]
         )
         self.assertEqual(
-            str(pathlib.Path("path/to/Dockerfile.production")),
+            str(pathlib.Path("path/to/Dockerfile.production").as_posix()),
             template_data["Resources"]["Function1"]["Metadata"]["Dockerfile"],
         )
         self.assertEqual(docker_build_args, template_data["Resources"]["Function1"]["Metadata"]["DockerBuildArgs"])
@@ -182,7 +183,7 @@ class TestResourceMetadataNormalizer(TestCase):
         self.assertEqual(
             expected_docker_context_path, template_data["Resources"]["Function1"]["Metadata"]["DockerContext"]
         )
-        expected_dockerfile_path = str(pathlib.Path("rel/path/to/Dockerfile"))
+        expected_dockerfile_path = str(pathlib.Path("rel/path/to/Dockerfile").as_posix())
         self.assertEqual(expected_dockerfile_path, template_data["Resources"]["Function1"]["Metadata"]["Dockerfile"])
         self.assertEqual(docker_build_args, template_data["Resources"]["Function1"]["Metadata"]["DockerBuildArgs"])
         self.assertEqual("Function1", template_data["Resources"]["Function1"]["Metadata"]["SamResourceId"])
@@ -455,6 +456,50 @@ class TestResourceMetadataNormalizer(TestCase):
         ResourceMetadataNormalizer.normalize(template_data)
         self.assertEqual("new path", template_data["Resources"]["Function1"]["Properties"]["Code"])
         self.assertEqual("Function1", template_data["Resources"]["Function1"]["Metadata"]["SamResourceId"])
+
+    def test_with_referenced_metadata(self):
+        input_template = """
+        Resources:
+          FirstFunction:
+            Type: AWS::Serverless::Function
+            Metadata: &GoFunctionMetadata
+              BuildMethod: go1.x
+              BuildProperties:
+                TrimGoPath: true
+            Properties:
+              CodeUri: dummy
+              Handler: bootstrap
+              Runtime: provided.al2
+          SecondFunction:
+            Type: AWS::Serverless::Function
+            Metadata: *GoFunctionMetadata
+            Properties:
+              CodeUri: dummy
+              Handler: bootstrap
+              Runtime: provided.al2
+          ThirdFunction:
+            Type: AWS::Serverless::Function
+            Metadata: *GoFunctionMetadata
+            Properties:
+              CodeUri: dummy
+              Handler: bootstrap
+              Runtime: provided.al2
+        """
+        template_dict = yaml_parse(input_template)
+        ResourceMetadataNormalizer.normalize(template_dict)
+
+        self.assertEqual(
+            template_dict.get("Resources", {}).get("FirstFunction", {}).get("Metadata", {}).get("SamResourceId"),
+            "FirstFunction",
+        )
+        self.assertEqual(
+            template_dict.get("Resources", {}).get("SecondFunction", {}).get("Metadata", {}).get("SamResourceId"),
+            "SecondFunction",
+        )
+        self.assertEqual(
+            template_dict.get("Resources", {}).get("ThirdFunction", {}).get("Metadata", {}).get("SamResourceId"),
+            "ThirdFunction",
+        )
 
 
 class TestResourceMetadataNormalizerGetResourceId(TestCase):

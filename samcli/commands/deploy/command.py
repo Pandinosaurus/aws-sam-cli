@@ -1,12 +1,13 @@
 """
 CLI command for "deploy" command
 """
+
 import logging
 import os
 
 import click
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import aws_creds_options, common_options, pass_context, print_cmdline_args
 from samcli.commands._utils.cdk_support_decorators import unsupported_command_cdk
 from samcli.commands._utils.click_mutex import ClickMutex
@@ -75,7 +76,7 @@ LOG = logging.getLogger(__name__)
     description=DESCRIPTION,
     requires_credentials=True,
 )
-@configuration_option(provider=TomlProvider(section=CONFIG_SECTION))
+@configuration_option(provider=ConfigProvider(section=CONFIG_SECTION))
 @click.option(
     "--guided",
     "-g",
@@ -134,6 +135,12 @@ LOG = logging.getLogger(__name__)
     cls=ClickMutex,
     incompatible_params=["disable_rollback", "no_disable_rollback"],
 )
+@click.option(
+    "--max-wait-duration",
+    default=60,
+    type=int,
+    help="Maximum duration in minutes to wait for the deployment to complete.",
+)
 @stack_name_option(callback=guided_deploy_stack_name)  # pylint: disable=E1120
 @s3_bucket_option(disable_callback=True)  # pylint: disable=E1120
 @image_repository_option
@@ -154,7 +161,8 @@ LOG = logging.getLogger(__name__)
 @capabilities_option
 @aws_creds_options
 @common_options
-@image_repository_validation
+@save_params_option
+@image_repository_validation()
 @pass_context
 @track_command
 @check_newer_version
@@ -186,10 +194,12 @@ def cli(
     signing_profiles,
     resolve_s3,
     resolve_image_repos,
+    save_params,
     config_file,
     config_env,
     disable_rollback,
     on_failure,
+    max_wait_duration,
 ):
     """
     `sam deploy` command entry point
@@ -225,6 +235,7 @@ def cli(
         resolve_image_repos,
         disable_rollback,
         on_failure,
+        max_wait_duration,
     )  # pragma: no cover
 
 
@@ -258,6 +269,7 @@ def do_cli(
     resolve_image_repos,
     disable_rollback,
     on_failure,
+    max_wait_duration,
 ):
     """
     Implementation of the ``cli`` method
@@ -307,6 +319,10 @@ def do_cli(
             )
 
     with osutils.tempfile_platform_independent() as output_template_file:
+        if guided:
+            context_param_overrides = sanitize_parameter_overrides(guided_context.guided_parameter_overrides)
+        else:
+            context_param_overrides = parameter_overrides
         with PackageContext(
             template_file=template_file,
             s3_bucket=guided_context.guided_s3_bucket if guided else s3_bucket,
@@ -323,6 +339,7 @@ def do_cli(
             region=guided_context.guided_region if guided else region,
             profile=profile,
             signing_profiles=guided_context.signing_profiles if guided else signing_profiles,
+            parameter_overrides=context_param_overrides,
         ) as package_context:
             package_context.run()
 
@@ -345,9 +362,7 @@ def do_cli(
             no_progressbar=no_progressbar,
             s3_prefix=guided_context.guided_s3_prefix if guided else s3_prefix,
             kms_key_id=kms_key_id,
-            parameter_overrides=sanitize_parameter_overrides(guided_context.guided_parameter_overrides)
-            if guided
-            else parameter_overrides,
+            parameter_overrides=context_param_overrides,
             capabilities=guided_context.guided_capabilities if guided else capabilities,
             no_execute_changeset=no_execute_changeset,
             role_arn=role_arn,
@@ -362,5 +377,6 @@ def do_cli(
             disable_rollback=guided_context.disable_rollback if guided else disable_rollback,
             poll_delay=poll_delay,
             on_failure=on_failure,
+            max_wait_duration=max_wait_duration,
         ) as deploy_context:
             deploy_context.run()

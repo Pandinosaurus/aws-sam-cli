@@ -1,6 +1,7 @@
 """
 Manages the set of application templates.
 """
+
 import itertools
 import json
 import logging
@@ -211,17 +212,17 @@ class InitTemplates:
         """
         This method get the manifest cloned from the git repo and preprocessed it.
         Below is the link to manifest:
-        https://github.com/aws/aws-sam-cli-app-templates/blob/master/manifest.json
+        https://github.com/aws/aws-sam-cli-app-templates/blob/master/manifest-v2.json
         The structure of the manifest is shown below:
         {
-            "dotnetcore3.1": [
+            "dotnet6": [
                 {
-                    "directory": "dotnetcore3.1/cookiecutter-aws-sam-hello-dotnet",
+                    "directory": "dotnet6/hello",
                     "displayName": "Hello World Example",
                     "dependencyManager": "cli-package",
                     "appTemplate": "hello-world",
                     "packageType": "Zip",
-                    "useCaseName": "Serverless API"
+                    "useCaseName": "Hello World Example"
                 },
             ]
         }
@@ -282,16 +283,21 @@ class InitTemplates:
         """
         try:
             response = requests.get(MANIFEST_URL, timeout=10)
-            body = response.text
-            # if the commit is not exist then MANIFEST_URL will be invalid, fall back to use manifest in latest commit
-            if response.status_code == Status.NOT_FOUND:
-                LOG.warning(
-                    "Request to MANIFEST_URL: %s failed, the commit hash in this url maybe invalid, "
-                    "Using manifest.json in the latest commit instead.",
-                    MANIFEST_URL,
-                )
+            if not response.ok:
+                # if the commit is not exist then MANIFEST_URL will be invalid,
+                # fall back to use manifest in latest commit
+                if response.status_code == Status.NOT_FOUND.value:
+                    LOG.warning(
+                        "Request to MANIFEST_URL: %s failed, the commit hash in this url maybe invalid, "
+                        "Using manifest.json in the latest commit instead.",
+                        MANIFEST_URL,
+                    )
+                else:
+                    LOG.debug(
+                        "Request to MANIFEST_URL: %s failed, with %s status code", MANIFEST_URL, response.status_code
+                    )
                 raise ManifestNotFoundException()
-
+            body = response.text
         except (requests.Timeout, requests.ConnectionError, ManifestNotFoundException):
             LOG.debug("Request to get Manifest failed, attempting to clone the repository")
             self.clone_templates_repo()

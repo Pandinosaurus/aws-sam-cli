@@ -1,16 +1,22 @@
 """
 Represents Lambda runtime containers.
 """
+
 import logging
+import os
 from typing import List
 
 from samcli.lib.utils.packagetype import IMAGE
+from samcli.local.docker.exceptions import InvalidRuntimeException
 from samcli.local.docker.lambda_debug_settings import LambdaDebugSettings
 
-from .container import Container
+from .container import DEFAULT_CONTAINER_HOST_INTERFACE, Container
 from .lambda_image import LambdaImage, Runtime
 
 LOG = logging.getLogger(__name__)
+
+RIE_LOG_LEVEL_ENV_VAR = "SAM_CLI_RIE_DEV"
+INVALID_RUNTIME_MESSAGE = "Unsupported Lambda runtime: {runtime}. For a list of supported runtimes, please visit https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html"
 
 
 class LambdaContainer(Container):
@@ -21,7 +27,6 @@ class LambdaContainer(Container):
     """
 
     _WORKING_DIR = "/var/task"
-    _DEFAULT_ENTRYPOINT = ["/var/rapid/aws-lambda-rie", "--log-level", "error"]
 
     # The Volume Mount path for debug files in docker
     _DEBUGGER_VOLUME_MOUNT_PATH = "/tmp/lambci_debug_files"
@@ -48,8 +53,10 @@ class LambdaContainer(Container):
         env_vars=None,
         debug_options=None,
         container_host=None,
-        container_host_interface=None,
+        container_host_interface=DEFAULT_CONTAINER_HOST_INTERFACE,
+        extra_hosts=None,
         function_full_path=None,
+        mount_symlinks=False,
     ):
         """
         Initializes the class
@@ -59,7 +66,8 @@ class LambdaContainer(Container):
         runtime str
             Name of the Lambda runtime
         imageuri str
-            Name of the Lambda Image which is of the form {image}:{tag}
+            Location of the Lambda Image which is of the form {image}:{tag}, sha256:{digest},
+            or a path to a local archive
         handler str
             Handler of the function to run
         packagetype str
@@ -85,11 +93,15 @@ class LambdaContainer(Container):
             Optional. Host of locally emulated Lambda container
         container_host_interface
             Optional. Interface that Docker host binds ports to
+        extra_hosts
+            Optional. Dict of hostname to IP resolutions
         function_full_path str
             Optional. The function full path, unique in all stacks
+        mount_symlinks bool
+            Optional. True is symlinks should be mounted in the container
         """
         if not Runtime.has_value(runtime) and not packagetype == IMAGE:
-            raise ValueError("Unsupported Lambda runtime {}".format(runtime))
+            raise InvalidRuntimeException(INVALID_RUNTIME_MESSAGE.format(runtime=runtime))
 
         image = LambdaContainer._get_image(
             lambda_image, runtime, packagetype, imageuri, layers, architecture, function_full_path
@@ -115,10 +127,10 @@ class LambdaContainer(Container):
             _additional_entrypoint_args = (image_config.get("EntryPoint") if image_config else None) or config.get(
                 "Entrypoint"
             )
-            _entrypoint = entry or self._DEFAULT_ENTRYPOINT
+            _entrypoint = entry or self._get_default_entry_point()
             # NOTE(sriram-mv): Only add entrypoint specified in the image configuration if the entrypoint
             # has not changed for debugging.
-            if isinstance(_additional_entrypoint_args, list) and entry == self._DEFAULT_ENTRYPOINT:
+            if isinstance(_additional_entrypoint_args, list) and entry == self._get_default_entry_point():
                 _entrypoint = _entrypoint + _additional_entrypoint_args
             _work_dir = (image_config.get("WorkingDirectory") if image_config else None) or config.get("WorkingDir")
 
@@ -136,7 +148,18 @@ class LambdaContainer(Container):
             additional_volumes=additional_volumes,
             container_host=container_host,
             container_host_interface=container_host_interface,
+            extra_hosts=extra_hosts,
+            mount_symlinks=mount_symlinks,
         )
+
+    @staticmethod
+    def _get_default_entry_point() -> List[str]:
+        """
+        Returns default entry point for lambda container, which is the path of the RIE executable with its debugging
+        configuration. If SAM_CLI_RIE_DEV is set to 1, RIE log level is set to 'debug', otherwise it is kept as 'error'.
+        """
+        rie_log_level = "debug" if os.environ.get(RIE_LOG_LEVEL_ENV_VAR, "0") == "1" else "error"
+        return ["/var/rapid/aws-lambda-rie", "--log-level", rie_log_level]
 
     @staticmethod
     def _get_exposed_ports(debug_options):
@@ -221,7 +244,8 @@ class LambdaContainer(Container):
         packagetype : str
             Package type for the lambda function which is either zip or image.
         image : str
-            Name of the Lambda Image which is of the form {image}:{tag}
+            Location of the Lambda Image which is of the form {image}:{tag}, sha256:{digest},
+            or a path to a local archive
         layers : List[str]
             List of layers
         architecture : str
@@ -253,7 +277,7 @@ class LambdaContainer(Container):
             ie. if command is ``node index.js arg1 arg2``, then this list will be ["node", "index.js", "arg1", "arg2"]
         """
 
-        entry = LambdaContainer._DEFAULT_ENTRYPOINT
+        entry = LambdaContainer._get_default_entry_point()
         if not debug_options:
             return entry, {}
 

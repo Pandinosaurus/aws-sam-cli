@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from unittest import TestCase
 
+import logging
 import boto3
 import zipfile
 import json
@@ -12,12 +13,16 @@ import os
 
 from samcli.cli.global_config import GlobalConfig
 from filelock import FileLock
+from samcli.lib.utils.s3 import parse_s3_url
 from tests.end_to_end.end_to_end_context import EndToEndTestContext
 from tests.testing_utils import CommandResult, run_command, run_command_with_input
 
+LOG = logging.getLogger(__name__)
+
 
 class BaseValidator(TestCase):
-    def __init__(self, test_context: EndToEndTestContext):
+    # NOTE: making test_context optional as a workaround for pytest 8.2.0 to collect tests - https://github.com/pytest-dev/pytest/pull/12320/files
+    def __init__(self, test_context: Optional[EndToEndTestContext] = None):
         super().__init__()
         self.test_context = test_context
 
@@ -25,7 +30,7 @@ class BaseValidator(TestCase):
         self.assertEqual(command_result.process.returncode, 0)
 
 
-class EndToEndBaseStage(TestCase):
+class EndToEndBaseStage:
     def __init__(
         self, validator: BaseValidator, test_context: EndToEndTestContext, command_list: Optional[List[str]] = None
     ):
@@ -62,21 +67,6 @@ class DefaultInitStage(EndToEndBaseStage):
             os.remove(default_samconfig)
         except Exception:
             pass
-
-
-class DefaultRemoteInvokeStage(EndToEndBaseStage):
-    def __init__(self, validator, test_context, stack_name):
-        super().__init__(validator, test_context)
-        self.stack_name = stack_name
-        self.lambda_client = boto3.client("lambda")
-        self.resource = boto3.resource("cloudformation")
-
-    def run_stage(self) -> CommandResult:
-        lambda_output = self.lambda_client.invoke(FunctionName=self._get_lambda_physical_id())
-        return CommandResult(lambda_output, "", "")
-
-    def _get_lambda_physical_id(self):
-        return self.resource.StackResource(self.stack_name, "HelloWorldFunction").physical_resource_id
 
 
 class DefaultDeleteStage(EndToEndBaseStage):
@@ -117,11 +107,17 @@ class PackageDownloadZipFunctionStage(EndToEndBaseStage):
         )
 
         if zipped_fn_s3_loc:
-            s3_info = S3Uploader.parse_s3_url(zipped_fn_s3_loc)
+            s3_info = parse_s3_url(zipped_fn_s3_loc)
             self.s3_client.download_file(s3_info["Bucket"], s3_info["Key"], str(zip_file_path))
 
             with zipfile.ZipFile(zip_file_path, "r") as zip_refzip:
                 zip_refzip.extractall(path=built_function_path)
+
+                file_list = zip_refzip.namelist()
+
+                for extracted_file in file_list:
+                    permission_mask = oct(os.stat(os.path.join(built_function_path, extracted_file)).st_mode)[-3:]
+                    LOG.info("Extracted file %s, with permission mask %s", extracted_file, permission_mask)
 
 
 class DefaultSyncStage(EndToEndBaseStage):

@@ -9,22 +9,21 @@ import threading
 from abc import abstractmethod
 from copy import deepcopy
 from pathlib import Path
-from typing import Sequence, Tuple, List, Any, Optional, Dict, cast, NamedTuple
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple, cast
 from uuid import uuid4
 
 import tomlkit
 from tomlkit.toml_document import TOMLDocument
 
-from samcli.commands._utils.experimental import is_experimental_enabled, ExperimentalFlag
+from samcli.commands._utils.experimental import ExperimentalFlag, is_experimental_enabled
 from samcli.lib.build.exceptions import InvalidBuildGraphException
 from samcli.lib.providers.provider import Function, LayerVersion
 from samcli.lib.samlib.resource_metadata_normalizer import (
-    SAM_RESOURCE_ID_KEY,
     SAM_IS_NORMALIZED,
+    SAM_RESOURCE_ID_KEY,
 )
-from samcli.lib.utils.packagetype import ZIP
 from samcli.lib.utils.architecture import X86_64
-
+from samcli.lib.utils.packagetype import ZIP
 
 LOG = logging.getLogger(__name__)
 
@@ -48,6 +47,9 @@ LAYER_FIELD = "layer"
 ARCHITECTURE_FIELD = "architecture"
 HANDLER_FIELD = "handler"
 SHARED_CODEURI_SUFFIX = "Shared"
+
+# Compiled runtimes that we need to compare handlers for
+COMPILED_RUNTIMES = ["go1.x"]
 
 
 def _function_build_definition_to_toml_table(
@@ -105,6 +107,7 @@ def _toml_table_to_function_build_definition(uuid: str, toml_table: tomlkit.api.
     function_build_definition = FunctionBuildDefinition(
         toml_table.get(RUNTIME_FIELD),
         toml_table.get(CODE_URI_FIELD),
+        None,
         toml_table.get(PACKAGETYPE_FIELD, ZIP),
         toml_table.get(ARCHITECTURE_FIELD, X86_64),
         dict(toml_table.get(METADATA_FIELD, {})),
@@ -582,6 +585,7 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
         self,
         runtime: Optional[str],
         codeuri: Optional[str],
+        imageuri: Optional[str],
         packagetype: str,
         architecture: str,
         metadata: Optional[Dict],
@@ -593,6 +597,7 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
         super().__init__(source_hash, manifest_hash, env_vars, architecture)
         self.runtime = runtime
         self.codeuri = codeuri
+        self.imageuri = imageuri
         self.packagetype = packagetype
         self.handler = handler
 
@@ -643,10 +648,14 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
             raise InvalidBuildGraphException("Build definition doesn't have any function definition to build")
 
     def __str__(self) -> str:
+        metadata = self.metadata.copy()
+        if "DockerBuildArgs" in metadata:
+            del metadata["DockerBuildArgs"]
+
         return (
             "BuildDefinition("
             f"{self.runtime}, {self.codeuri}, {self.packagetype}, {self.source_hash}, "
-            f"{self.uuid}, {self.metadata}, {self.env_vars}, {self.architecture}, "
+            f"{self.uuid}, {metadata}, {self.env_vars}, {self.architecture}, "
             f"{[f.functionname for f in self.functions]})"
         )
 
@@ -677,9 +686,16 @@ class FunctionBuildDefinition(AbstractBuildDefinition):
             if self.handler != other.handler:
                 return False
 
+        if self.runtime in COMPILED_RUNTIMES:
+            # For compiled languages, we need to check if handlers within the same CodeUri are the same
+            # if they are different, it should create a separate build definition
+            if self.handler != other.handler:
+                return False
+
         return (
             self.runtime == other.runtime
             and self.codeuri == other.codeuri
+            and self.imageuri == other.imageuri
             and self.packagetype == other.packagetype
             and self.metadata == other.metadata
             and self.env_vars == other.env_vars

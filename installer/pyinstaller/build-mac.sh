@@ -30,11 +30,11 @@ if [ "$python_library_zip_filename" = "" ]; then
 fi
 
 if [ "$openssl_version" = "" ]; then
-    openssl_version="1.1.1o";
+    openssl_version="3.3.1";
 fi
 
 if [ "$python_version" = "" ]; then
-    python_version="3.8.13";
+    python_version="3.11.10";
 fi
 
 if ! [ "$build_binary_name" = "" ]; then
@@ -45,7 +45,7 @@ else
     is_nightly="false"
 fi
 
-set -eu
+set -eux
 
 echo "Making Folders"
 mkdir -p .build/src
@@ -62,8 +62,9 @@ cd openssl-"$openssl_version"
 # Openssl configure https://wiki.openssl.org/index.php/Compilation_and_Installation
 ./Configure --prefix=/usr/local --openssldir=/usr/local/openssl no-ssl3 no-ssl3-method no-zlib ${openssl_config_arch} enable-ec_nistp_64_gcc_128
 
-make
-sudo make install
+make -j8
+# install_sw installs OpenSSL without manual pages
+sudo make -j8 install_sw
 cd ..
 
 # Copying aws-sam-cli source code
@@ -71,20 +72,35 @@ echo "Copying Source"
 cp -r ../[!.]* ./src
 cp -r ./src/* ./output/aws-sam-cli-src
 
-echo "Removing CI Scripts"
+echo "Removing CI Scripts and other files/direcories not needed"
 rm -vf ./output/aws-sam-cli-src/appveyor*.yml
+rm -rf ./output/aws-sam-cli-src/tests
+rm -rf ./output/aws-sam-cli-src/designs
+rm -rf ./output/aws-sam-cli-src/docs
+rm -rf ./output/aws-sam-cli-src/media
+rm -rf ./output/aws-sam-cli-src/schema
+rm -rf ./output/aws-sam-cli-src/Make.ps1
+rm -rf ./output/aws-sam-cli-src/CODEOWNERS
+rm -rf ./output/aws-sam-cli-src/CODE_OF_CONDUCT.md
+rm -rf ./output/aws-sam-cli-src/CONTRIBUTING.md
+rm -rf ./output/aws-sam-cli-src/DESIGN.md
+rm -rf ./output/aws-sam-cli-src/Makefile
+rm -rf ./output/aws-sam-cli-src/mypy.ini
+rm -rf ./output/aws-sam-cli-src/pytest.ini
 
 echo "Installing Python"
 curl "https://www.python.org/ftp/python/${python_version}/Python-${python_version}.tgz" --output python.tgz
 tar -xzf python.tgz
 cd Python-"$python_version"
-./configure --enable-shared
+./configure \
+    --enable-shared \
+    --with-openssl=/usr/local
 make -j8
-sudo make install
+sudo make -j8 install
 cd ..
 
 echo "Installing Python Libraries"
-/usr/local/bin/python3.8 -m venv venv
+/usr/local/bin/python3.11 -m venv venv
 ./venv/bin/pip install --upgrade pip
 ./venv/bin/pip install -r src/requirements/reproducible-mac.txt
 
@@ -93,6 +109,7 @@ cp -r ./venv/lib/python*/site-packages/* ./output/python-libraries
 
 echo "Installing PyInstaller"
 ./venv/bin/pip install -r src/requirements/pyinstaller-build.txt
+./venv/bin/pip check
 
 # Building the binary using pyinstaller
 echo "Building Binary"

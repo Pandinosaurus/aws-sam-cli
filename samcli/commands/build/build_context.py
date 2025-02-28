@@ -1,48 +1,51 @@
 """
 Context object used by build command
 """
+
 import logging
 import os
 import pathlib
 import shutil
-from typing import Dict, Optional, List, Tuple, cast
+from typing import Dict, List, Optional, Tuple
 
 import click
 
-from samcli.commands.build.utils import prompt_user_to_enable_mount_with_write_if_needed, MountMode
-from samcli.lib.build.bundler import EsbuildBundlerManager
-from samcli.lib.providers.sam_api_provider import SamApiProvider
-from samcli.lib.telemetry.event import EventTracker
-from samcli.lib.utils.packagetype import IMAGE
-
-from samcli.commands._utils.template import get_template_data
+from samcli.commands._utils.constants import DEFAULT_BUILD_DIR
 from samcli.commands._utils.experimental import ExperimentalFlag, prompt_experimental
+from samcli.commands._utils.template import (
+    get_template_data,
+    move_template,
+)
 from samcli.commands.build.exceptions import InvalidBuildDirException, MissingBuildMethodException
+from samcli.commands.build.utils import MountMode, prompt_user_to_enable_mount_with_write_if_needed
+from samcli.commands.exceptions import UserException
 from samcli.lib.bootstrap.nested_stack.nested_stack_manager import NestedStackManager
+from samcli.lib.build.app_builder import (
+    ApplicationBuilder,
+    ApplicationBuildResult,
+    BuildError,
+    UnsupportedBuilderLibraryVersionError,
+)
 from samcli.lib.build.build_graph import DEFAULT_DEPENDENCIES_DIR
+from samcli.lib.build.bundler import EsbuildBundlerManager
+from samcli.lib.build.exceptions import (
+    BuildInsideContainerError,
+    InvalidBuildGraphException,
+)
+from samcli.lib.build.workflow_config import UnsupportedRuntimeException
 from samcli.lib.intrinsic_resolver.intrinsics_symbol_table import IntrinsicsSymbolTable
-from samcli.lib.providers.provider import ResourcesToBuildCollector, Stack, Function, LayerVersion
+from samcli.lib.providers.provider import LayerVersion, ResourcesToBuildCollector, Stack
+from samcli.lib.providers.sam_api_provider import SamApiProvider
 from samcli.lib.providers.sam_function_provider import SamFunctionProvider
 from samcli.lib.providers.sam_layer_provider import SamLayerProvider
 from samcli.lib.providers.sam_stack_provider import SamLocalStackProvider
+from samcli.lib.telemetry.event import EventName, EventTracker, UsedFeature
 from samcli.lib.utils.osutils import BUILD_DIR_PERMISSIONS
 from samcli.local.docker.manager import ContainerManager
-from samcli.local.lambdafn.exceptions import ResourceNotFound
-from samcli.lib.build.exceptions import BuildInsideContainerError
-
-from samcli.commands.exceptions import UserException
-
-from samcli.lib.build.app_builder import (
-    ApplicationBuilder,
-    BuildError,
-    UnsupportedBuilderLibraryVersionError,
-    ApplicationBuildResult,
+from samcli.local.lambdafn.exceptions import (
+    FunctionNotFound,
+    ResourceNotFound,
 )
-from samcli.commands._utils.constants import DEFAULT_BUILD_DIR
-from samcli.lib.build.workflow_config import UnsupportedRuntimeException
-from samcli.local.lambdafn.exceptions import FunctionNotFound
-from samcli.commands._utils.template import move_template
-from samcli.lib.build.exceptions import InvalidBuildGraphException
 
 LOG = logging.getLogger(__name__)
 
@@ -79,6 +82,7 @@ class BuildContext:
         hook_name: Optional[str] = None,
         build_in_source: Optional[bool] = None,
         mount_with: str = MountMode.READ.value,
+        mount_symlinks: Optional[bool] = False,
     ) -> None:
         """
         Initialize the class
@@ -136,6 +140,8 @@ class BuildContext:
             Set to True to build in the source directory.
         mount_with:
             Mount mode of source code directory when building inside container, READ ONLY by default
+        mount_symlinks Optional[bool]:
+            Indicates if symlinks should be mounted inside the container
         """
 
         self._resource_identifier = resource_identifier
@@ -177,6 +183,7 @@ class BuildContext:
         self._build_in_source = build_in_source
         self._build_result: Optional[ApplicationBuildResult] = None
         self._mount_with = MountMode(mount_with)
+        self._mount_symlinks = mount_symlinks
 
     def __enter__(self) -> "BuildContext":
         self.set_up()
@@ -230,12 +237,14 @@ class BuildContext:
     def get_resources_to_build(self):
         return self.resources_to_build
 
-    def run(self):
+    def run(self) -> None:
         """Runs the building process by creating an ApplicationBuilder."""
         if self._is_sam_template():
             SamApiProvider.check_implicit_api_resource_ids(self.stacks)
 
         self._stacks = self._handle_build_pre_processing()
+
+        caught_exception: Optional[Exception] = None
 
         try:
             # boolean value indicates if mount with write or not, defaults to READ ONLY
@@ -268,13 +277,14 @@ class BuildContext:
                 combine_dependencies=not self._create_auto_dependency_layer,
                 build_in_source=self._build_in_source,
                 mount_with_write=mount_with_write,
+                mount_symlinks=self._mount_symlinks,
             )
 
             self._check_exclude_warning()
             self._check_rust_cargo_experimental_flag()
 
             for f in self.get_resources_to_build().functions:
-                EventTracker.track_event("BuildFunctionRuntime", f.runtime)
+                EventTracker.track_event(EventName.BUILD_FUNCTION_RUNTIME.value, f.runtime)
 
             self._build_result = builder.build()
 
@@ -304,6 +314,8 @@ class BuildContext:
 
                 click.secho(msg, fg="yellow")
         except FunctionNotFound as function_not_found_ex:
+            caught_exception = function_not_found_ex
+
             raise UserException(
                 str(function_not_found_ex), wrapped_from=function_not_found_ex.__class__.__name__
             ) from function_not_found_ex
@@ -315,6 +327,8 @@ class BuildContext:
             InvalidBuildGraphException,
             ResourceNotFound,
         ) as ex:
+            caught_exception = ex
+
             click.secho("\nBuild Failed", fg="red")
 
             # Some Exceptions have a deeper wrapped exception that needs to be surfaced
@@ -322,6 +336,12 @@ class BuildContext:
             deep_wrap = getattr(ex, "wrapped_from", None)
             wrapped_from = deep_wrap if deep_wrap else ex.__class__.__name__
             raise UserException(str(ex), wrapped_from=wrapped_from) from ex
+        finally:
+            if self.build_in_source:
+                exception_name = type(caught_exception).__name__ if caught_exception else None
+                EventTracker.track_event(
+                    EventName.USED_FEATURE.value, UsedFeature.BUILD_IN_SOURCE.value, exception_name
+                )
 
     def _is_sam_template(self) -> bool:
         """Check if a given template is a SAM template"""
@@ -562,8 +582,8 @@ Commands you can use next
 
         if not result.functions and not result.layers:
             # Collect all functions and layers that are not inline
-            all_resources = [f.name for f in self.function_provider.get_all() if not f.inlinecode]
-            all_resources.extend([l.name for l in self.layer_provider.get_all()])
+            all_resources = [func.name for func in self.function_provider.get_all() if not func.inlinecode]
+            all_resources.extend([layer.name for layer in self.layer_provider.get_all()])
 
             available_resource_message = (
                 f"{resource_identifier} not found. Possible options in your " f"template: {all_resources}"
@@ -584,16 +604,16 @@ Commands you can use next
         excludes: Tuple[str, ...] = self._exclude if self._exclude is not None else ()
         result.add_functions(
             [
-                f
-                for f in self.function_provider.get_all()
-                if (f.name not in excludes) and BuildContext._is_function_buildable(f)
+                func
+                for func in self.function_provider.get_all()
+                if (func.name not in excludes) and func.function_build_info.is_buildable()
             ]
         )
         result.add_layers(
             [
-                l
-                for l in self.layer_provider.get_all()
-                if (l.name not in excludes) and BuildContext.is_layer_buildable(l)
+                layer
+                for layer in self.layer_provider.get_all()
+                if (layer.name not in excludes) and BuildContext.is_layer_buildable(layer)
             ]
         )
         return result
@@ -624,7 +644,7 @@ Commands you can use next
             return
 
         resource_collector.add_function(function)
-        resource_collector.add_layers([l for l in function.layers if BuildContext.is_layer_buildable(l)])
+        resource_collector.add_layers([layer for layer in function.layers if BuildContext.is_layer_buildable(layer)])
 
     def _collect_single_buildable_layer(
         self, resource_identifier: str, resource_collector: ResourcesToBuildCollector
@@ -649,34 +669,6 @@ Commands you can use next
             raise MissingBuildMethodException(f"Build method missing in layer {resource_identifier}.")
 
         resource_collector.add_layer(layer)
-
-    @staticmethod
-    def _is_function_buildable(function: Function):
-        # no need to build inline functions
-        if function.inlinecode:
-            LOG.debug("Skip building inline function: %s", function.full_path)
-            return False
-        # no need to build functions that are already packaged as a zip file
-        if isinstance(function.codeuri, str) and function.codeuri.endswith(".zip"):
-            LOG.debug("Skip building zip function: %s", function.full_path)
-            return False
-        # skip build the functions that marked as skip-build
-        if function.skip_build:
-            LOG.debug("Skip building pre-built function: %s", function.full_path)
-            return False
-        # skip build the functions with Image Package Type with no docker context or docker file metadata
-        if function.packagetype == IMAGE:
-            metadata = function.metadata if function.metadata else {}
-            dockerfile = cast(str, metadata.get("Dockerfile", ""))
-            docker_context = cast(str, metadata.get("DockerContext", ""))
-            if not dockerfile or not docker_context:
-                LOG.debug(
-                    "Skip Building %s function, as it is missing either Dockerfile or DockerContext "
-                    "metadata properties.",
-                    function.full_path,
-                )
-                return False
-        return True
 
     @staticmethod
     def is_layer_buildable(layer: LayerVersion):

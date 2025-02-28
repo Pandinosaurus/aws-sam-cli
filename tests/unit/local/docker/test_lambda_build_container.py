@@ -1,6 +1,7 @@
 """
 Unit test for Lambda Build Container management
 """
+
 import itertools
 import json
 import pathlib
@@ -11,7 +12,7 @@ from unittest.mock import patch
 from parameterized import parameterized
 
 from samcli.lib.utils.architecture import X86_64, ARM64
-from samcli.local.docker.lambda_build_container import LambdaBuildContainer
+from samcli.local.docker.lambda_build_container import LambdaBuildContainer, InvalidArchitectureForImage
 
 
 class TestLambdaBuildContainer_init(TestCase):
@@ -73,9 +74,13 @@ class TestLambdaBuildContainer_init(TestCase):
 
 class TestLambdaBuildContainer_make_request(TestCase):
     @parameterized.expand(itertools.product([True, False], [[], ["exp1", "exp2"]]))
+    @patch("samcli.local.docker.lambda_build_container.patch_runtime")
     @patch("samcli.local.docker.lambda_build_container.get_enabled_experimental_flags")
-    def test_must_make_request_object_string(self, is_building_layer, experimental_flags, patched_experimental_flags):
+    def test_must_make_request_object_string(
+        self, is_building_layer, experimental_flags, patched_experimental_flags, patch_runtime_mock
+    ):
         patched_experimental_flags.return_value = experimental_flags
+        patch_runtime_mock.return_value = "runtime"
 
         container_dirs = {
             "base_dir": "base_dir",
@@ -133,6 +138,8 @@ class TestLambdaBuildContainer_make_request(TestCase):
             },
         )
 
+        patch_runtime_mock.assert_called_with("runtime")
+
 
 class TestLambdaBuildContainer_get_container_dirs(TestCase):
     def test_must_return_dirs(self):
@@ -175,7 +182,7 @@ class TestLambdaBuildContainer_get_image(TestCase):
     @parameterized.expand(
         [
             ("myruntime", ARM64, "public.ecr.aws/sam/build-myruntime:latest-arm64"),
-            ("nodejs14.x", X86_64, "public.ecr.aws/sam/build-nodejs14.x:latest-x86_64"),
+            ("nodejs20.x", X86_64, "public.ecr.aws/sam/build-nodejs20.x:latest-x86_64"),
         ]
     )
     def test_must_get_image_name(self, runtime, architecture, expected_image_name):
@@ -216,6 +223,10 @@ class TestLambdaBuildContainer_get_image_tag(TestCase):
     )
     def test_must_get_image_tag(self, architecture, expected_image_tag):
         self.assertEqual(expected_image_tag, LambdaBuildContainer.get_image_tag(architecture))
+
+    def test_must_raise_an_error_for_invalid_architecture(self):
+        with self.assertRaises(InvalidArchitectureForImage):
+            LambdaBuildContainer.get_image_tag("invalid-architecture")
 
 
 class TestLambdaBuildContainer_get_entrypoint(TestCase):

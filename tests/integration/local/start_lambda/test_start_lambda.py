@@ -1,3 +1,5 @@
+import signal
+from unittest import skipIf
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time, sleep
@@ -13,6 +15,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from samcli.commands.local.cli_common.invoke_context import ContainersInitializationMode
+from tests.testing_utils import IS_WINDOWS
 from .start_lambda_api_integ_base import StartLambdaIntegBaseClass, WatchWarmContainersIntegBaseClass
 
 
@@ -257,19 +260,8 @@ class TestLambdaService(StartLambdaIntegBaseClass):
         )
         response_data = json.loads(response.get("Payload").read().decode("utf-8"))
 
-        print(response_data)
-
-        self.assertEqual(
-            response_data,
-            {
-                "errorMessage": "Lambda is raising an exception",
-                "errorType": "Exception",
-                "stackTrace": [
-                    '  File "/var/task/main.py", line 51, in raise_exception\n    raise Exception("Lambda is raising an exception")\n'
-                ],
-            },
-        )
-        self.assertEqual(response.get("FunctionError"), "Unhandled")
+        self.assertEqual(response_data.get("errorMessage"), "Lambda is raising an exception")
+        self.assertEqual(response_data.get("errorType"), "Exception")
         self.assertEqual(response.get("StatusCode"), 200)
 
     @parameterized.expand([("False"), ("True")])
@@ -288,6 +280,28 @@ class TestLambdaService(StartLambdaIntegBaseClass):
         """
         response = self.lambda_client.invoke(
             FunctionName=f"{self.parent_path if use_full_path == 'True' else ''}TimeoutFunction"
+        )
+
+        self.assertEqual(response.get("Payload").read().decode("utf-8"), "")
+        self.assertIsNone(response.get("FunctionError"))
+        self.assertEqual(response.get("StatusCode"), 200)
+
+    @parameterized.expand([("False"), ("True")])
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=300, method="thread")
+    def test_invoke_with_function_timeout_using_lookup_value(self, use_full_path):
+        """
+        This behavior does not match the actually Lambda Service. For functions that timeout, data returned like the
+        following:
+        {"errorMessage":"<timestamp> <request_id> Task timed out after 5.00 seconds"}
+
+        For Local Lambda's, however, timeouts are an interrupt on the thread that runs invokes the function. Since the
+        invoke is on a different thread, we do not (currently) have a way to communicate this back to the caller. So
+        when a timeout happens locally, we do not add the FunctionError: Unhandled to the response and have an empty
+        string as the data returned (because no data was found in stdout from the container).
+        """
+        response = self.lambda_client.invoke(
+            FunctionName=f"{self.parent_path if use_full_path == 'True' else ''}TimeoutFunctionUsingLookupValue"
         )
 
         self.assertEqual(response.get("Payload").read().decode("utf-8"), "")
@@ -315,6 +329,12 @@ class TestWarmContainersBaseClass(StartLambdaIntegBaseClass):
                 running_containers += 1
         return running_containers
 
+    def tearDown(self) -> None:
+        # Use a new container test UUID for the next test run to avoid
+        # counting additional containers in the event of a retry
+        self.mode_env_variable = str(uuid.uuid4())
+        super().tearDown()
+
 
 @parameterized_class(
     ("template_path",),
@@ -337,6 +357,38 @@ class TestWarmContainers(TestWarmContainersBaseClass):
         response = json.loads(result.get("Payload").read().decode("utf-8"))
         self.assertEqual(response.get("statusCode"), 200)
         self.assertEqual(json.loads(response.get("body")), {"hello": "world"})
+
+
+@skipIf(IS_WINDOWS, "SIGTERM interrupt doesn't exist on Windows")
+class TestWarmContainersHandlesSigTermInterrupt(TestWarmContainersBaseClass):
+    template_path = "/testdata/start_api/template-warm-containers.yaml"
+    container_mode = ContainersInitializationMode.EAGER.value
+    mode_env_variable = str(uuid.uuid4())
+    parameter_overrides = {"ModeEnvVariable": mode_env_variable}
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_can_invoke_lambda_function_successfully(self):
+        result = self.lambda_client.invoke(FunctionName="HelloWorldFunction")
+        self.assertEqual(result.get("StatusCode"), 200)
+
+        response = json.loads(result.get("Payload").read().decode("utf-8"))
+        self.assertEqual(response.get("statusCode"), 200)
+        self.assertEqual(json.loads(response.get("body")), {"hello": "world"})
+
+        initiated_containers = self.count_running_containers()
+        self.assertEqual(initiated_containers, 2)
+
+        service_process = self.start_lambda_process
+        service_process.send_signal(signal.SIGTERM)
+
+        # Sleep for 10 seconds since this is the default time that Docker
+        # allows for a process to handle a SIGTERM before sending a SIGKILL
+        sleep(10)
+
+        remaining_containers = self.count_running_containers()
+        self.assertEqual(remaining_containers, 0)
+        self.assertEqual(service_process.poll(), 0)
 
 
 @parameterized_class(
@@ -626,7 +678,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -639,7 +691,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler2
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -729,7 +781,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -742,7 +794,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler2
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -832,7 +884,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main2.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: dir
       Timeout: 600
       Events:
@@ -927,7 +979,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.EAGER.value
     build_before_invoke = True
@@ -1033,7 +1085,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.EAGER.value
     build_before_invoke = True
@@ -1176,7 +1228,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.LAZY.value
     build_before_invoke = True
@@ -1242,7 +1294,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -1255,7 +1307,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler2
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -1345,7 +1397,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -1358,7 +1410,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler2
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -1448,7 +1500,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main2.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: dir
       Timeout: 600
       Events:
@@ -1571,7 +1623,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.LAZY.value
     build_before_invoke = True

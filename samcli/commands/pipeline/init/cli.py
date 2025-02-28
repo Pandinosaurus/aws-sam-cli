@@ -1,11 +1,12 @@
 """
 CLI command for "pipeline init" command
 """
+
 from typing import Any, Optional
 
 import click
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import common_options as cli_framework_options
 from samcli.cli.main import pass_context
 from samcli.commands._utils.command_exception_handler import command_exception_handler
@@ -24,7 +25,7 @@ file generation process, or refer to resources you have previously created with 
 
 
 @click.command("init", help=HELP_TEXT, short_help=SHORT_HELP)
-@configuration_option(provider=TomlProvider(section="parameters"))
+@configuration_option(provider=ConfigProvider(section="parameters"))
 @click.option(
     "--bootstrap",
     is_flag=True,
@@ -32,10 +33,11 @@ file generation process, or refer to resources you have previously created with 
     help="Enable interactive mode that walks the user through creating necessary AWS infrastructure resources.",
 )
 @cli_framework_options
+@save_params_option
 @pass_context
 @track_command  # pylint: disable=R0914
 @command_exception_handler
-def cli(ctx: Any, config_env: Optional[str], config_file: Optional[str], bootstrap: bool) -> None:
+def cli(ctx: Any, config_env: Optional[str], config_file: Optional[str], bootstrap: bool, save_params: bool) -> None:
     """
     `sam pipeline init` command entry point
     """

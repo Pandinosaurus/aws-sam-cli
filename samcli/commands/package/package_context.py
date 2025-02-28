@@ -24,6 +24,7 @@ import click
 import docker
 
 from samcli.commands.package.exceptions import PackageFailedError
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.intrinsic_resolver.intrinsics_symbol_table import IntrinsicsSymbolTable
 from samcli.lib.package.artifact_exporter import Template
 from samcli.lib.package.code_signer import CodeSigner
@@ -69,6 +70,7 @@ class PackageContext:
         metadata,
         region,
         profile,
+        parameter_overrides=None,
         on_deploy=False,
         signing_profiles=None,
     ):
@@ -88,6 +90,7 @@ class PackageContext:
         self.on_deploy = on_deploy
         self.code_signer = None
         self.signing_profiles = signing_profiles
+        self.parameter_overrides = parameter_overrides
         self._global_parameter_overrides = {IntrinsicsSymbolTable.AWS_REGION: region} if region else {}
 
     def __enter__(self):
@@ -103,6 +106,7 @@ class PackageContext:
         stacks, _ = SamLocalStackProvider.get_stacks(
             self.template_file,
             global_parameter_overrides=self._global_parameter_overrides,
+            parameter_overrides=self.parameter_overrides,
         )
         self._warn_preview_runtime(stacks)
         self.image_repositories = self.image_repositories if self.image_repositories is not None else {}
@@ -120,7 +124,7 @@ class PackageContext:
         )
         ecr_client = boto3.client("ecr", config=get_boto_config_with_user_agent(region_name=region_name))
 
-        docker_client = docker.from_env()
+        docker_client = docker.from_env(version=DOCKER_MIN_API_VERSION)
 
         s3_uploader = S3Uploader(
             s3_client, self.s3_bucket, self.s3_prefix, self.kms_key_id, self.force_upload, self.no_progressbar

@@ -14,18 +14,22 @@ import docker
 import jmespath
 from pathlib import Path
 
-from samcli.commands.build.utils import MountMode
+import pytest
+from parameterized import parameterized_class
+
 from samcli.lib.utils import osutils
-from samcli.lib.utils.architecture import X86_64, has_runtime_multi_arch_image
+from samcli.lib.utils.architecture import ARM64, X86_64
 from samcli.local.docker.lambda_build_container import LambdaBuildContainer
 from samcli.yamlhelper import yaml_parse
 from tests.testing_utils import (
     IS_WINDOWS,
+    CommandResult,
     run_command,
     SKIP_DOCKER_TESTS,
     SKIP_DOCKER_MESSAGE,
     SKIP_DOCKER_BUILD,
     get_sam_command,
+    run_command_with_input,
 )
 
 LOG = logging.getLogger(__name__)
@@ -46,9 +50,9 @@ class BuildIntegBase(TestCase):
         # location that is shared in Docker. Most temp directories are not shared. Therefore we are
         # using a scratch space within the test folder that is .gitignored. Contents of this folder
         # is also deleted after every test run
-        self.scratch_dir = str(Path(__file__).resolve().parent.joinpath(str(uuid.uuid4()).replace("-", "")[:10]))
+        self.scratch_dir = str(Path(__file__).resolve().parent.joinpath("tmp", str(uuid.uuid4()).replace("-", "")[:10]))
         shutil.rmtree(self.scratch_dir, ignore_errors=True)
-        os.mkdir(self.scratch_dir)
+        os.makedirs(self.scratch_dir)
 
         self.working_dir = tempfile.mkdtemp(dir=self.scratch_dir)
         self.custom_build_dir = tempfile.mkdtemp(dir=self.scratch_dir)
@@ -83,6 +87,9 @@ class BuildIntegBase(TestCase):
         beta_features=None,
         build_in_source=None,
         mount_with=None,
+        config_file=None,
+        save_params=False,
+        project_root_dir=None,
     ):
         command_list = [self.cmd, "build"]
 
@@ -146,6 +153,15 @@ class BuildIntegBase(TestCase):
         if build_in_source is not None:
             command_list += ["--build-in-source"] if build_in_source else ["--no-build-in-source"]
 
+        if config_file is not None:
+            command_list += ["--config-file", config_file]
+
+        if save_params:
+            command_list += ["--save-params"]
+
+        if project_root_dir is not None:
+            command_list += ["--terraform-project-root-path", project_root_dir]
+
         return command_list
 
     def verify_docker_container_cleanedup(self, runtime):
@@ -161,7 +177,7 @@ class BuildIntegBase(TestCase):
         if IS_WINDOWS:
             time.sleep(1)
         docker_client = docker.from_env()
-        containers = docker_client.containers.list(all=True)
+        containers = docker_client.containers.list(all=True, filters={"status": "exited"})
         return len(containers)
 
     def verify_pulled_image(self, runtime, architecture=X86_64):
@@ -203,6 +219,7 @@ class BuildIntegBase(TestCase):
     def _verify_resource_property(self, template_path, logical_id, property, expected_value):
         with open(template_path, "r") as fp:
             template_dict = yaml_parse(fp.read())
+
             self.assertEqual(
                 expected_value, jmespath.search(f"Resources.{logical_id}.Properties.{property}", template_dict)
             )
@@ -226,13 +243,23 @@ class BuildIntegBase(TestCase):
                 overrides,
             ]
 
-        LOG.info("Running invoke Command: {}".format(cmdlist))
+        for i in range(5):
+            process_execute = run_command(cmdlist)
+            process_stdout = process_execute.stdout.decode("utf-8")
+            process_stderr = process_execute.stderr.decode("utf-8")
+            LOG.info("Local invoke stdout: %s", process_stdout)
+            LOG.info("Local invoke stderr: %s", process_stderr)
 
-        process_execute = run_command(cmdlist)
-        process_execute.process.wait()
+            if "timed out after" in process_stderr:
+                LOG.info("Function timed out, retrying")
+                continue
 
-        process_stdout = process_execute.stdout.decode("utf-8")
-        self.assertEqual(json.loads(process_stdout), expected_result)
+            if json.loads(process_stdout) == expected_result:
+                LOG.info("Expected result found, succeeded!")
+                # success
+                return
+
+        self.fail("Failed to invoke function & get expected result")
 
     def get_override(self, runtime, code_uri, architecture, handler):
         overrides = {"Runtime": runtime, "CodeUri": code_uri, "Handler": handler}
@@ -241,9 +268,10 @@ class BuildIntegBase(TestCase):
         return overrides
 
 
+@pytest.mark.ruby
 class BuildIntegRubyBase(BuildIntegBase):
     EXPECTED_FILES_PROJECT_MANIFEST = {"app.rb"}
-    EXPECTED_RUBY_GEM = "aws-record"
+    EXPECTED_RUBY_GEM = "aws-eventstream"
 
     FUNCTION_LOGICAL_ID = "Function"
 
@@ -251,8 +279,6 @@ class BuildIntegRubyBase(BuildIntegBase):
         overrides = self.get_override(runtime, code_uri, architecture, "ignored")
         cmdlist = self.get_command_list(use_container=use_container, parameter_overrides=overrides)
 
-        LOG.info("Running Command:")
-        LOG.info(cmdlist)
         run_command(cmdlist, cwd=self.working_dir)
 
         self._verify_built_artifact(
@@ -324,20 +350,26 @@ class BuildIntegRubyBase(BuildIntegBase):
         self.assertTrue(any([True if self.EXPECTED_RUBY_GEM in gem else False for gem in os.listdir(str(gem_path))]))
 
 
+@pytest.mark.nodejs
 class BuildIntegEsbuildBase(BuildIntegBase):
     FUNCTION_LOGICAL_ID = "Function"
     # Everything should be minifed to one line and a second line for the sourcemap mapping
     MAX_MINIFIED_LINE_COUNT = 2
+    MANIFEST_PATH: Optional[str] = None
 
     def _test_with_default_package_json(
         self, runtime, use_container, code_uri, expected_files, handler, architecture=None, build_in_source=None
     ):
+        if use_container and (SKIP_DOCKER_TESTS or SKIP_DOCKER_BUILD):
+            self.skipTest(SKIP_DOCKER_MESSAGE)
         overrides = self.get_override(runtime, code_uri, architecture, handler)
+        manifest_path = str(Path(self.test_data_path, self.MANIFEST_PATH)) if self.MANIFEST_PATH else None
         cmdlist = self.get_command_list(
-            use_container=use_container, parameter_overrides=overrides, build_in_source=build_in_source
+            use_container=use_container,
+            parameter_overrides=overrides,
+            build_in_source=build_in_source,
+            manifest_path=manifest_path,
         )
-
-        LOG.info("Running Command: {}".format(cmdlist))
         run_command(cmdlist, cwd=self.working_dir)
 
         self._verify_built_artifact(
@@ -359,11 +391,10 @@ class BuildIntegEsbuildBase(BuildIntegBase):
             self.verify_docker_container_cleanedup(runtime)
             self.verify_pulled_image(runtime, architecture)
 
-    def _test_with_various_properties(self, overrides):
+    def _test_with_various_properties(self, overrides, runtime):
         overrides = self.get_override(**overrides)
         cmdlist = self.get_command_list(parameter_overrides=overrides)
 
-        LOG.info("Running Command: {}".format(cmdlist))
         run_command(cmdlist, cwd=self.working_dir)
 
         expected = {"body": '{"message":"hello world!"}', "statusCode": 200}
@@ -413,17 +444,24 @@ class BuildIntegEsbuildBase(BuildIntegBase):
         self.assertEqual(actual_files, expected_files)
 
 
+@pytest.mark.nodejs
 class BuildIntegNodeBase(BuildIntegBase):
     EXPECTED_FILES_PROJECT_MANIFEST = {"node_modules", "main.js"}
     EXPECTED_NODE_MODULES = {"minimal-request-promise"}
-
+    CODE_URI = "Node"
     FUNCTION_LOGICAL_ID = "Function"
+    TEST_INVOKE = False
+    MANIFEST_PATH: Optional[str] = None
 
     def _test_with_default_package_json(self, runtime, use_container, relative_path, architecture=None):
-        overrides = self.get_override(runtime, "Node", architecture, "ignored")
-        cmdlist = self.get_command_list(use_container=use_container, parameter_overrides=overrides)
+        if use_container and (SKIP_DOCKER_TESTS or SKIP_DOCKER_BUILD):
+            self.skipTest(SKIP_DOCKER_MESSAGE)
+        overrides = self.get_override(runtime, self.CODE_URI, architecture, "main.lambdaHandler")
+        manifest_path = str(Path(self.test_data_path, self.MANIFEST_PATH)) if self.MANIFEST_PATH else None
+        cmdlist = self.get_command_list(
+            use_container=use_container, parameter_overrides=overrides, manifest_path=manifest_path
+        )
 
-        LOG.info("Running Command: {}".format(cmdlist))
         run_command(cmdlist, cwd=self.working_dir)
 
         self._verify_built_artifact(
@@ -432,6 +470,12 @@ class BuildIntegNodeBase(BuildIntegBase):
             self.EXPECTED_FILES_PROJECT_MANIFEST,
             self.EXPECTED_NODE_MODULES,
         )
+
+        expected = {"body": '{"message":"hello world!"}', "statusCode": 200}
+        if not SKIP_DOCKER_TESTS and self.TEST_INVOKE:
+            self._verify_invoke_built_function(
+                self.built_template, self.FUNCTION_LOGICAL_ID, self._make_parameter_override_arg(overrides), expected
+            )
 
         self._verify_resource_property(
             str(self.built_template),
@@ -479,6 +523,7 @@ class BuildIntegNodeBase(BuildIntegBase):
         self.assertEqual(actual_files, expected_modules)
 
 
+@pytest.mark.golang
 class BuildIntegGoBase(BuildIntegBase):
     FUNCTION_LOGICAL_ID = "Function"
     EXPECTED_FILES_PROJECT_MANIFEST = {"hello-world"}
@@ -488,8 +533,6 @@ class BuildIntegGoBase(BuildIntegBase):
         cmdlist = self.get_command_list(use_container=use_container, parameter_overrides=overrides)
 
         # Need to pass GOPATH ENV variable to match the test directory when running build
-
-        LOG.info("Running Command: {}".format(cmdlist))
         LOG.info("Running with SAM_BUILD_MODE={}".format(mode))
 
         newenv = os.environ.copy()
@@ -544,8 +587,26 @@ class BuildIntegGoBase(BuildIntegBase):
         self.assertEqual(actual_files, expected_files)
 
 
+@pytest.mark.java
 class BuildIntegJavaBase(BuildIntegBase):
+    # Run gradlew & gradle-kotlin containerized tests only with latest java version
+    LATEST_JAVA_VERSION = "java21"
+    SKIP_ARM64_EARLIER_JAVA_TESTS = "Skipping gradlew & gradle-kotlin test for this Java version"
+
     FUNCTION_LOGICAL_ID = "Function"
+    EXPECTED_FILES_PROJECT_MANIFEST_GRADLE = {"aws", "lib", "META-INF"}
+    EXPECTED_FILES_PROJECT_MANIFEST_MAVEN = {"aws", "lib"}
+    EXPECTED_GRADLE_DEPENDENCIES = {"annotations-2.1.0.jar", "aws-lambda-java-core-1.1.0.jar"}
+    EXPECTED_MAVEN_DEPENDENCIES = {
+        "software.amazon.awssdk.annotations-2.1.0.jar",
+        "com.amazonaws.aws-lambda-java-core-1.1.0.jar",
+    }
+
+    FUNCTION_LOGICAL_ID = "Function"
+    USING_GRADLE_PATH = os.path.join("Java", "gradle")
+    USING_GRADLEW_PATH = os.path.join("Java", "gradlew")
+    USING_GRADLE_KOTLIN_PATH = os.path.join("Java", "gradle-kotlin")
+    USING_MAVEN_PATH = os.path.join("Java", "maven")
 
     def _test_with_building_java(
         self,
@@ -560,13 +621,20 @@ class BuildIntegJavaBase(BuildIntegBase):
         if use_container and (SKIP_DOCKER_TESTS or SKIP_DOCKER_BUILD):
             self.skipTest(SKIP_DOCKER_MESSAGE)
 
+        # skip arm64 use container tests for gradlew and gradle-kotlin
+        if (
+            use_container
+            and runtime != self.LATEST_JAVA_VERSION
+            and architecture == ARM64
+            and any(path in code_path for path in [self.USING_GRADLEW_PATH, self.USING_GRADLE_KOTLIN_PATH])
+        ):
+            self.skipTest(self.SKIP_ARM64_EARLIER_JAVA_TESTS)
+
         overrides = self.get_override(runtime, code_path, architecture, "aws.example.Hello::myHandler")
         cmdlist = self.get_command_list(use_container=use_container, parameter_overrides=overrides)
         cmdlist += ["--skip-pull-image"]
         if code_path == self.USING_GRADLEW_PATH and use_container and IS_WINDOWS:
             osutils.convert_to_unix_line_ending(os.path.join(self.test_data_path, self.USING_GRADLEW_PATH, "gradlew"))
-
-        LOG.info("Running Command: {}".format(cmdlist))
         run_command(cmdlist, cwd=self.working_dir, timeout=900)
 
         self._verify_built_artifact(
@@ -628,6 +696,7 @@ class BuildIntegJavaBase(BuildIntegBase):
         self.assertEqual(lib_dir_contents, expected_modules)
 
 
+@pytest.mark.python
 class BuildIntegPythonBase(BuildIntegBase):
     EXPECTED_FILES_PROJECT_MANIFEST = {
         "__init__.py",
@@ -655,7 +724,6 @@ class BuildIntegPythonBase(BuildIntegBase):
         overrides = self.get_override(runtime, codeuri, architecture, "main.handler") if do_override else None
         cmdlist = self.get_command_list(use_container=use_container, parameter_overrides=overrides)
 
-        LOG.info("Running Command: {}".format(cmdlist))
         run_command(cmdlist, cwd=self.working_dir)
 
         self._verify_built_artifact(
@@ -720,9 +788,13 @@ class BuildIntegPythonBase(BuildIntegBase):
         self.assertEqual(actual_files, expected_files)
 
     def _get_python_version(self):
-        return "python{}.{}".format(sys.version_info.major, sys.version_info.minor)
+        """
+        This method is used to override python version of some of the tests which is run with Makefile
+        """
+        return "python3.10"
 
 
+@pytest.mark.provided
 class BuildIntegProvidedBase(BuildIntegBase):
     EXPECTED_FILES_PROJECT_MANIFEST = {"__init__.py", "main.py", "requests", "requirements.txt"}
 
@@ -746,7 +818,6 @@ class BuildIntegProvidedBase(BuildIntegBase):
             build_in_source=build_in_source,
         )
 
-        LOG.info("Running Command: {}".format(cmdlist))
         # Built using Makefile for a python project.
         run_command(cmdlist, cwd=self.working_dir)
 
@@ -850,7 +921,7 @@ class DedupBuildIntegBase(BuildIntegBase):
         # check HelloWorld and HelloMars functions are built in the same build
         self.assertRegex(
             command_result.stderr.decode("utf-8"),
-            "Building codeuri: .* runtime: .* metadata: .* functions: " "HelloWorldFunction, HelloMarsFunction",
+            "Building codeuri: .* runtime: .* functions: " "HelloWorldFunction, HelloMarsFunction",
         )
 
 
@@ -888,7 +959,7 @@ class NestedBuildIntegBase(BuildIntegBase):
         for function_full_path in function_full_paths:
             self.assertRegex(
                 command_result.stderr.decode("utf-8"),
-                f"Building codeuri: .* runtime: .* metadata: .* functions: .*{function_full_path}.*",
+                f"Building codeuri: .* runtime: .* functions: .*{function_full_path}.*",
             )
 
     def _verify_invoke_built_functions(self, template_path, overrides, function_and_expected):
@@ -933,7 +1004,7 @@ class IntrinsicIntegBase(BuildIntegBase):
         for function_full_path in function_full_paths:
             self.assertRegex(
                 command_result.stderr.decode("utf-8"),
-                f"Building codeuri: .* runtime: .* metadata: .* functions:.*{function_full_path}.*",
+                f"Building codeuri: .* runtime: .* functions:.*{function_full_path}.*",
             )
         self.assertIn(
             f"Building layer '{layer_full_path}'",
@@ -968,9 +1039,58 @@ class IntrinsicIntegBase(BuildIntegBase):
                 self.assertEqual(0, process_execute.process.returncode)
 
 
+def rust_parameterized_class(cls):
+    """
+    common class parameterize for rust integration tests
+    """
+    cls = parameterized_class(
+        ("template", "code_uri", "binary", "expected_invoke_result"),
+        [
+            (
+                "template_build_method_rust_single_function.yaml",
+                "Rust/single-function",
+                None,
+                {"req_id": "34", "msg": "Hello World"},
+            ),
+            (
+                "template_build_method_rust_binary.yaml",
+                "Rust/multi-binaries",
+                "function_a",
+                {"req_id": "63", "msg": "Hello FunctionA"},
+            ),
+            (
+                "template_build_method_rust_binary.yaml",
+                "Rust/multi-binaries",
+                "function_b",
+                {"req_id": "99", "msg": "Hello FunctionB"},
+            ),
+            (
+                "template_build_method_rust_cargo_workspace.yaml",
+                "Rust/cargo_workspace/function_b",
+                None,
+                {"req_id": "281", "msg": "Hello World B"},
+            ),
+        ],
+    )(cls)
+    return cls
+
+
+@pytest.mark.provided
 class BuildIntegRustBase(BuildIntegBase):
     FUNCTION_LOGICAL_ID = "Function"
     EXPECTED_FILES_PROJECT_MANIFEST = {"bootstrap"}
+
+    def setUp(self):
+        super().setUp()
+        # Copy source code to working_dir to allow tests run in parallel, as Cargo Lambda generates artifacts in source code dir
+        osutils.copytree(
+            Path(self.template_path).parent.joinpath(self.code_uri),
+            Path(self.working_dir).joinpath(self.code_uri),
+        )
+        # copy template path
+        tmp_template_path = Path(self.working_dir).joinpath(self.template)
+        shutil.copyfile(Path(self.template_path), tmp_template_path)
+        self.template_path = str(tmp_template_path)
 
     def _test_with_rust_cargo_lambda(
         self,
@@ -983,6 +1103,8 @@ class BuildIntegRustBase(BuildIntegBase):
         use_container=False,
         expected_invoke_result=None,
     ):
+        if use_container and (SKIP_DOCKER_TESTS or SKIP_DOCKER_BUILD):
+            self.skipTest(SKIP_DOCKER_MESSAGE)
         overrides = self.get_override(runtime, code_uri, architecture, handler)
         if binary:
             overrides["Binary"] = binary
@@ -1010,6 +1132,103 @@ class BuildIntegRustBase(BuildIntegBase):
         if use_container:
             self.verify_docker_container_cleanedup(runtime)
             self.verify_pulled_image(runtime, architecture)
+
+    def _verify_built_artifact(self, build_dir, function_logical_id, expected_files):
+        self.assertTrue(build_dir.exists(), "Build directory should be created")
+
+        build_dir_files = os.listdir(str(build_dir))
+        self.assertIn("template.yaml", build_dir_files)
+        self.assertIn(function_logical_id, build_dir_files)
+
+        template_path = build_dir.joinpath("template.yaml")
+        resource_artifact_dir = build_dir.joinpath(function_logical_id)
+
+        # Make sure the template has correct CodeUri for resource
+        self._verify_resource_property(str(template_path), function_logical_id, "CodeUri", function_logical_id)
+
+        all_artifacts = set(os.listdir(str(resource_artifact_dir)))
+        actual_files = all_artifacts.intersection(expected_files)
+        self.assertEqual(actual_files, expected_files)
+
+
+@pytest.mark.dotnet
+class BuildIntegDotnetBase(BuildIntegBase):
+    FUNCTION_LOGICAL_ID = "Function"
+    EXPECTED_FILES_PROJECT_MANIFEST = {
+        "Amazon.Lambda.APIGatewayEvents.dll",
+        "Amazon.Lambda.Core.dll",
+        "HelloWorld.runtimeconfig.json",
+        "Amazon.Lambda.Serialization.Json.dll",
+        "Newtonsoft.Json.dll",
+        "HelloWorld.deps.json",
+        "HelloWorld.dll",
+    }
+
+    EXPECTED_FILES_PROJECT_MANIFEST_PROVIDED = {
+        "bootstrap",
+    }
+
+    def validate_build_command(self, overrides, mode, mount_mode=None, use_container=False, input=None) -> None:
+        do_use_container = mount_mode != None or use_container
+
+        cmdlist = self.get_command_list(
+            use_container=do_use_container, parameter_overrides=overrides, mount_with=mount_mode
+        )
+
+        if do_use_container:
+            cmdlist += ["--container-env-var", "DOTNET_CLI_HOME=/tmp/dotnet"]
+            cmdlist += ["--container-env-var", "XDG_DATA_HOME=/tmp/xdg"]
+
+        LOG.info("Running with SAM_BUILD_MODE={}".format(mode))
+
+        newenv = os.environ.copy()
+        if mode:
+            newenv["SAM_BUILD_MODE"] = mode
+
+        if input:
+            command_result = run_command_with_input(cmdlist, input.encode(), cwd=self.working_dir, env=newenv)
+        else:
+            command_result = run_command(cmdlist, cwd=self.working_dir, env=newenv)
+
+        self.assertEqual(command_result.process.returncode, 0)
+
+    def validate_invoke_command(self, overrides, runtime):
+        expected = "{'message': 'Hello World'}"
+
+        self._verify_invoke_built_function(
+            self.built_template, self.FUNCTION_LOGICAL_ID, self._make_parameter_override_arg(overrides), expected
+        )
+        self.verify_docker_container_cleanedup(runtime)
+
+    def validate_build_artifacts(self, expected_manifest):
+        self._verify_built_artifact(
+            self.default_build_dir,
+            self.FUNCTION_LOGICAL_ID,
+            expected_manifest,
+        )
+
+        self._verify_built_properties()
+
+    def _verify_built_properties(self):
+        self._verify_resource_property(
+            str(self.built_template),
+            "OtherRelativePathResource",
+            "BodyS3Location",
+            os.path.relpath(
+                os.path.normpath(os.path.join(str(self.test_data_path), "SomeRelativePath")),
+                str(self.default_build_dir),
+            ),
+        )
+
+        self._verify_resource_property(
+            str(self.built_template),
+            "GlueResource",
+            "Command.ScriptLocation",
+            os.path.relpath(
+                os.path.normpath(os.path.join(str(self.test_data_path), "SomeRelativePath")),
+                str(self.default_build_dir),
+            ),
+        )
 
     def _verify_built_artifact(self, build_dir, function_logical_id, expected_files):
         self.assertTrue(build_dir.exists(), "Build directory should be created")

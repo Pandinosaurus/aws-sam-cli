@@ -13,7 +13,7 @@ Resources:
     Properties:
       CodeUri: java8
       Handler: sts.App::handleRequest
-      Runtime: java8
+      Runtime: java8.al2
       MemorySize: 1024
   PythonStsExample:
     Type: AWS::Serverless::Function
@@ -26,7 +26,7 @@ Resources:
     Properties:
       CodeUri: ruby
       Handler: app.lambda_handler
-      Runtime: ruby2.7
+      Runtime: ruby3.2
   NodeStsExample:
     Type: AWS::Serverless::Function
     Properties:

@@ -5,7 +5,7 @@ Unit test for `start-api` CLI
 from unittest import TestCase
 from unittest.mock import patch, Mock
 
-from parameterized import parameterized
+from parameterized import parameterized, param
 
 from samcli.commands.local.start_api.cli import do_cli as start_api_cli
 from samcli.commands.local.lib.exceptions import NoApisDefined, InvalidIntermediateImageError
@@ -13,7 +13,7 @@ from samcli.lib.providers.exceptions import InvalidLayerReference
 from samcli.commands.exceptions import UserException
 from samcli.commands.validate.lib.exceptions import InvalidSamDocumentException
 from samcli.commands.local.lib.exceptions import OverridesNotWellDefinedError
-from samcli.local.docker.exceptions import ContainerNotStartableException
+from samcli.local.docker.exceptions import ContainerNotStartableException, PortAlreadyInUse
 from samcli.local.docker.lambda_debug_settings import DebuggingNotSupported
 
 
@@ -35,9 +35,12 @@ class TestCli(TestCase):
         self.shutdown = True
         self.region_name = "region"
         self.profile = "profile"
+        self.disable_authorizer = False
 
         self.warm_containers = None
         self.debug_function = None
+
+        self.hook_name = None
 
         self.ctx_mock = Mock()
         self.ctx_mock.region = self.region_name
@@ -45,11 +48,15 @@ class TestCli(TestCase):
 
         self.host = "host"
         self.port = 123
+        self.ssl_cert_file = None
+        self.ssl_key_file = None
         self.static_dir = "staticdir"
+        self.add_host = []
 
         self.container_host = "localhost"
         self.container_host_interface = "127.0.0.1"
         self.invoke_image = ()
+        self.no_mem_limit = False
 
     @patch("samcli.commands.local.cli_common.invoke_context.InvokeContext")
     @patch("samcli.commands.local.lib.local_api_service.LocalApiService")
@@ -63,6 +70,7 @@ class TestCli(TestCase):
 
         self.warm_containers = None
         self.debug_function = None
+        self.disable_authorizer = False
 
         self.call_cli()
 
@@ -88,11 +96,18 @@ class TestCli(TestCase):
             shutdown=self.shutdown,
             container_host=self.container_host,
             container_host_interface=self.container_host_interface,
+            add_host=self.add_host,
             invoke_images={},
+            no_mem_limit=self.no_mem_limit,
         )
 
         local_api_service_mock.assert_called_with(
-            lambda_invoke_context=context_mock, port=self.port, host=self.host, static_dir=self.static_dir
+            lambda_invoke_context=context_mock,
+            port=self.port,
+            host=self.host,
+            ssl_context=None,
+            static_dir=self.static_dir,
+            disable_authorizer=self.disable_authorizer,
         )
 
         service_mock.start.assert_called_with()
@@ -149,16 +164,30 @@ class TestCli(TestCase):
         expected = "bad env vars"
         self.assertEqual(msg, expected)
 
+    @parameterized.expand(
+        [
+            param(
+                ContainerNotStartableException("no free ports on host to bind with container"),
+                "no free ports on host to bind with container",
+            ),
+            param(
+                PortAlreadyInUse("provided port already in use"),
+                "provided port already in use",
+            ),
+        ]
+    )
     @patch("samcli.commands.local.cli_common.invoke_context.InvokeContext")
-    def test_must_raise_user_exception_on_no_free_ports(self, invoke_context_mock):
-        invoke_context_mock.side_effect = ContainerNotStartableException("no free ports on host to bind with container")
+    def test_must_raise_user_exception_on_no_free_ports(
+        self, side_effect_exception, expected_exception_message, invoke_context_mock
+    ):
+        invoke_context_mock.side_effect = side_effect_exception
 
         with self.assertRaises(UserException) as context:
             self.call_cli()
 
         msg = str(context.exception)
         expected = "no free ports on host to bind with container"
-        self.assertEqual(msg, expected)
+        self.assertEqual(msg, expected_exception_message)
 
     @patch("samcli.commands.local.cli_common.invoke_context.InvokeContext")
     def test_must_raise_user_exception_on_invalid_imageuri(self, invoke_context_mock):
@@ -196,4 +225,10 @@ class TestCli(TestCase):
             container_host=self.container_host,
             container_host_interface=self.container_host_interface,
             invoke_image=self.invoke_image,
+            hook_name=self.hook_name,
+            ssl_cert_file=self.ssl_cert_file,
+            ssl_key_file=self.ssl_key_file,
+            disable_authorizer=self.disable_authorizer,
+            add_host=self.add_host,
+            no_mem_limit=self.no_mem_limit,
         )

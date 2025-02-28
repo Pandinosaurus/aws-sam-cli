@@ -1,5 +1,7 @@
 import base64
 import shutil
+import signal
+from unittest import skipIf
 import uuid
 import random
 from pathlib import Path
@@ -11,10 +13,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from time import time, sleep
 
 import pytest
-from parameterized import parameterized_class
+from parameterized import parameterized_class, parameterized
 
 from samcli.commands.local.cli_common.invoke_context import ContainersInitializationMode
 from samcli.local.apigw.route import Route
+from tests.testing_utils import IS_WINDOWS
 from .start_api_integ_base import StartApiIntegBaseClass, WritableStartApiIntegBaseClass
 from ..invoke.layer_utils import LayerUtils
 
@@ -149,10 +152,12 @@ class TestServiceHTTP10(StartApiIntegBaseClass):
 
 
 @parameterized_class(
-    ("template_path",),
+    ("template_path", "container_mode", "endpoint"),
     [
-        ("/testdata/start_api/template.yaml",),
-        ("/testdata/start_api/cdk/template_cdk.yaml",),
+        ("/testdata/start_api/template.yaml", "LAZY", "/sleepfortenseconds/function1"),
+        ("/testdata/start_api/template.yaml", "LAZY", "/sleepfortensecondszipped"),
+        ("/testdata/start_api/template.yaml", "EAGER", "/sleepfortenseconds/function1"),
+        ("/testdata/start_api/cdk/template_cdk.yaml", "LAZY", "/sleepfortenseconds/function1"),
     ],
 )
 class TestParallelRequests(StartApiIntegBaseClass):
@@ -175,20 +180,19 @@ class TestParallelRequests(StartApiIntegBaseClass):
         start_time = time()
         with ThreadPoolExecutor(number_of_requests) as thread_pool:
             futures = [
-                thread_pool.submit(requests.get, self.url + "/sleepfortenseconds/function1", timeout=300)
+                thread_pool.submit(requests.get, self.url + self.endpoint, timeout=300)
                 for _ in range(0, number_of_requests)
             ]
             results = [r.result() for r in as_completed(futures)]
-
             end_time = time()
-
-            self.assertEqual(len(results), 10)
-            self.assertGreater(end_time - start_time, 10)
 
             for result in results:
                 self.assertEqual(result.status_code, 200)
                 self.assertEqual(result.json(), {"message": "HelloWorld! I just slept and waking up."})
                 self.assertEqual(result.raw.version, 11)  # Checks if the response is HTTP/1.1 version
+            # after checking responses now check the time to complete
+            self.assertEqual(len(results), 10)
+            self.assertGreater(end_time - start_time, 10)
 
     @pytest.mark.flaky(reruns=3)
     @pytest.mark.timeout(timeout=600, method="thread")
@@ -600,6 +604,15 @@ class TestServiceWithHttpApi(StartApiIntegBaseClass):
         response = requests.get(self.url + "/invalidv1responsestring", timeout=300)
 
         self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json(), {"message": "Internal server error"})
+        self.assertEqual(response.raw.version, 11)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_invalid_lambda_json_body_response(self):
+        response = requests.get(self.url + "/invalidresponsebody", timeout=300)
+
+        self.assertEqual(response.status_code, 500)
         self.assertEqual(response.json(), {"message": "Internal server error"})
         self.assertEqual(response.raw.version, 11)
 
@@ -1510,7 +1523,14 @@ class TestOptionsHandler(StartApiIntegBaseClass):
         self.assertEqual(response.status_code, 204)
 
 
-class TestServiceCorsSwaggerRequests(StartApiIntegBaseClass):
+def _create_request_params(origin):
+    params = {"timeout": 300}
+    if origin:
+        params["headers"] = {"Origin": origin}
+    return params
+
+
+class TestServiceCorsSwaggerRequestsWithRestAPI(StartApiIntegBaseClass):
     """
     Test to check that the correct headers are being added with Cors with swagger code
     """
@@ -1521,21 +1541,33 @@ class TestServiceCorsSwaggerRequests(StartApiIntegBaseClass):
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
 
-    @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=600, method="thread")
-    def test_cors_swagger_options(self):
-        """
-        This tests that the Cors are added to option requests in the swagger template
-        """
-        response = requests.options(self.url + "/echobase64eventbody", timeout=300)
-
+    def assert_cors(self, response):
         self.assertEqual(response.status_code, 200)
-
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "*")
         self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), "origin, x-requested-with")
         self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), "GET,OPTIONS")
         self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), "true")
         self.assertEqual(response.headers.get("Access-Control-Max-Age"), "510")
+
+    @parameterized.expand(["https://abc", None])
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_swagger_options(self, origin):
+        """
+        This tests that the Cors headers are added to OPTIONS responses
+        """
+        response = requests.options(self.url + "/echobase64eventbody", **_create_request_params(origin))
+        self.assert_cors(response)
+
+    @parameterized.expand(["https://abc", None])
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_swagger_get(self, origin):
+        """
+        This tests that the Cors headers are added to _other_ method responses
+        """
+        response = requests.get(self.url + "/echobase64eventbody", **_create_request_params(origin))
+        self.assert_cors(response)
 
 
 class TestServiceCorsSwaggerRequestsWithHttpApi(StartApiIntegBaseClass):
@@ -1549,20 +1581,98 @@ class TestServiceCorsSwaggerRequestsWithHttpApi(StartApiIntegBaseClass):
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
 
-    @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=600, method="thread")
-    def test_cors_swagger_options_httpapi(self):
-        """
-        This tests that the Cors are added to option requests in the swagger template
-        """
-        response = requests.options(self.url + "/httpapi-echobase64eventbody", timeout=300)
-
+    def assert_cors(self, response):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "*")
         self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), "origin")
         self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), "GET,OPTIONS,POST")
         self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), "true")
         self.assertEqual(response.headers.get("Access-Control-Max-Age"), "42")
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_swagger_options_httpapi(self):
+        """
+        This tests that the Cors headers are added to OPTIONS responses
+        """
+        response = requests.options(
+            self.url + "/httpapi-echobase64eventbody", headers={"Origin": "https://abc"}, timeout=300
+        )
+        self.assert_cors(response)
+
+    def test_cors_swagger_get_httpapi(self):
+        """
+        This tests that the Cors headers are added to _other_ method requests
+        """
+        response = requests.get(
+            self.url + "/httpapi-echobase64eventbody", headers={"Origin": "https://abc"}, timeout=300
+        )
+        self.assert_cors(response)
+
+
+class TestServiceCorsComplexHttpApi(StartApiIntegBaseClass):
+    """
+    This test covers following cases:
+    - Cors headers added to OPTIONS responses
+    - Cors headers added to other method responses
+    - Cors configuration supports multiple origins, allow headers and methods
+    """
+
+    template_path = "/testdata/start_api/template-cors.yaml"
+    binary_data_file = "testdata/start_api/binarydata.gif"
+
+    def setUp(self):
+        self.url = "http://127.0.0.1:{}/test".format(self.port)
+
+    def assert_presence(self, response, expected_origin):
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), expected_origin)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), "Accept,My-Custom-Header")
+        self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), "DELETE,GET,OPTIONS,PATCH,POST,PUT")
+        self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), "true")
+        self.assertEqual(response.headers.get("Access-Control-Max-Age"), "3600")
+
+    def assert_absence(self, response):
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), None)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), None)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), None)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), None)
+        self.assertEqual(response.headers.get("Access-Control-Max-Age"), None)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_complex_options_presence(self):
+        """
+        This tests that the Cors headers are added to OPTIONS responses
+        """
+        self.assert_presence(requests.options(self.url, headers={"Origin": "https://abc"}, timeout=300), "https://abc")
+        self.assert_presence(
+            requests.options(self.url, headers={"Origin": "http://xyz:3000"}, timeout=300), "http://xyz:3000"
+        )
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_complex_post_presence(self):
+        """
+        This tests that the Cors headers are added to POST responses
+        """
+        self.assert_presence(requests.post(self.url, headers={"Origin": "https://abc"}, timeout=300), "https://abc")
+        self.assert_presence(
+            requests.post(self.url, headers={"Origin": "http://xyz:3000"}, timeout=300), "http://xyz:3000"
+        )
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_cors_complex_absence(self):
+        """
+        This tests that the Cors headers are NOT added to responses
+        when Origin is either unknown or missing
+        """
+        self.assert_absence(requests.options(self.url, headers={"Origin": "https://unknown"}, timeout=300))
+        self.assert_absence(requests.post(self.url, headers={"Origin": "https://unknown"}, timeout=300))
+        self.assert_absence(requests.options(self.url, timeout=300))
+        self.assert_absence(requests.post(self.url, timeout=300))
 
 
 class TestServiceCorsGlobalRequests(StartApiIntegBaseClass):
@@ -1575,35 +1685,19 @@ class TestServiceCorsGlobalRequests(StartApiIntegBaseClass):
     def setUp(self):
         self.url = "http://127.0.0.1:{}".format(self.port)
 
+    @parameterized.expand(["https://abc", None])
     @pytest.mark.flaky(reruns=3)
     @pytest.mark.timeout(timeout=600, method="thread")
-    def test_cors_global(self):
+    def test_cors_global(self, origin):
         """
-        This tests that the Cors are added to options requests when the global property is set
+        This tests that the Cors headers are added to OPTIONS response when the global property is set
         """
-        response = requests.options(self.url + "/echobase64eventbody", timeout=300)
+        response = requests.options(self.url + "/echobase64eventbody", **_create_request_params(origin))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "*")
         self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), None)
         self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), ",".join(sorted(Route.ANY_HTTP_METHODS)))
-        self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), None)
-        self.assertEqual(response.headers.get("Access-Control-Max-Age"), None)
-
-    @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=600, method="thread")
-    def test_cors_global_get(self):
-        """
-        This tests that the Cors are added to post requests when the global property is set
-        """
-        response = requests.get(self.url + "/onlysetstatuscode", timeout=300)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content.decode("utf-8"), "")
-        self.assertEqual(response.headers.get("Content-Type"), "application/json")
-        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), None)
-        self.assertEqual(response.headers.get("Access-Control-Allow-Headers"), None)
-        self.assertEqual(response.headers.get("Access-Control-Allow-Methods"), None)
         self.assertEqual(response.headers.get("Access-Control-Allow-Credentials"), None)
         self.assertEqual(response.headers.get("Access-Control-Max-Age"), None)
 
@@ -1867,9 +1961,11 @@ class TestCFNTemplateQuickCreatedHttpApiWithDefaultRoute(StartApiIntegBaseClass)
     @pytest.mark.timeout(timeout=600, method="thread")
     def test_cors_options(self):
         """
-        This tests that the Cors are added to option requests in the swagger template
+        This tests that the Cors headers are added to option requests in the swagger template
         """
-        response = requests.options(self.url + "/anypath/anypath", timeout=300)
+        response = requests.options(
+            self.url + "/anypath/anypath", headers={"Origin": "https://example.com"}, timeout=300
+        )
 
         self.assertEqual(response.status_code, 200)
 
@@ -2045,6 +2141,12 @@ class TestWarmContainersBaseClass(StartApiIntegBaseClass):
                 running_containers += 1
         return running_containers
 
+    def tearDown(self) -> None:
+        # Use a new container test UUID for the next test run to avoid
+        # counting additional containers in the event of a retry
+        self.mode_env_variable = str(uuid.uuid4())
+        super().tearDown()
+
 
 @parameterized_class(
     ("template_path",),
@@ -2064,6 +2166,35 @@ class TestWarmContainers(TestWarmContainersBaseClass):
         response = requests.post(self.url + "/id", timeout=300)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"hello": "world"})
+
+
+@skipIf(IS_WINDOWS, "SIGTERM interrupt doesn't exist on Windows")
+class TestWarmContainersHandlesSigTerm(TestWarmContainersBaseClass):
+    template_path = "/testdata/start_api/template-warm-containers.yaml"
+    container_mode = ContainersInitializationMode.EAGER.value
+    mode_env_variable = str(uuid.uuid4())
+    parameter_overrides = {"ModeEnvVariable": mode_env_variable}
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_can_invoke_lambda_function_successfully(self):
+        response = requests.post(self.url + "/id", timeout=300)
+        initiated_containers = self.count_running_containers()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"hello": "world"})
+        self.assertEqual(initiated_containers, 2)
+
+        service_process = self.start_api_process
+        service_process.send_signal(signal.SIGTERM)
+
+        # Sleep for 10 seconds since this is the default time that Docker
+        # allows for a process to handle a SIGTERM before sending a SIGKILL
+        sleep(10)
+
+        remaining_containers = self.count_running_containers()
+        self.assertEqual(remaining_containers, 0)
+        self.assertEqual(service_process.poll(), 0)
 
 
 @parameterized_class(
@@ -2231,7 +2362,7 @@ class TestImagePackageTypeWithEagerLazyContainersMode(StartApiIntegBaseClass):
 
 class TestWatchingZipWarmContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2280,7 +2411,7 @@ def handler(event, context):
 
 class TestWatchingTemplateChangesLambdaFunctionHandlerChanged(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2298,7 +2429,7 @@ Resources:
     """
 
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2318,7 +2449,7 @@ Resources:
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world"})}
-    
+
 def handler2(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}
     """
@@ -2346,13 +2477,13 @@ def handler2(event, context):
 
 class TestWatchingTemplateChangesLambdaFunctionCodeUriChanged(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -2364,13 +2495,13 @@ Resources:
     """
 
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main2.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: dir
       Timeout: 600
       Events:
@@ -2415,7 +2546,7 @@ def handler(event, context):
 
 class TestWatchingImageWarmContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2450,7 +2581,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.EAGER.value
     build_before_invoke = True
@@ -2479,7 +2610,7 @@ COPY main.py ./"""
 
 class TestWatchingTemplateChangesImageDockerFileChangedLocation(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2507,7 +2638,7 @@ Resources:
       Dockerfile: Dockerfile
         """
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2542,7 +2673,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.EAGER.value
     build_before_invoke = True
@@ -2573,7 +2704,7 @@ COPY main.py ./"""
 
 class TestWatchingZipLazyContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2622,7 +2753,7 @@ def handler(event, context):
 
 class TestWatchingImageLazyContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2657,7 +2788,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.LAZY.value
     build_before_invoke = True
@@ -2686,7 +2817,7 @@ COPY main.py ./"""
 
 class TestWatchingTemplateChangesLambdaFunctionHandlerChangedLazyContainer(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2704,7 +2835,7 @@ Resources:
     """
 
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
@@ -2752,13 +2883,13 @@ def handler2(event, context):
 
 class TestWatchingTemplateChangesLambdaFunctionCodeUriChangedLazyContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: .
       Timeout: 600
       Events:
@@ -2770,13 +2901,13 @@ Resources:
     """
 
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Resources:
   HelloWorldFunction:
     Type: AWS::Serverless::Function
     Properties:
       Handler: main2.handler
-      Runtime: python3.7
+      Runtime: python3.11
       CodeUri: dir
       Timeout: 600
       Events:
@@ -2821,7 +2952,7 @@ def handler(event, context):
 
 class TestWatchingTemplateChangesImageDockerFileChangedLocationLazyContainers(WritableStartApiIntegBaseClass):
     template_content = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2849,7 +2980,7 @@ Resources:
       Dockerfile: Dockerfile
         """
     template_content_2 = """AWSTemplateFormatVersion : '2010-09-09'
-Transform: AWS::Serverless-2016-10-31    
+Transform: AWS::Serverless-2016-10-31
 Parameters:
   Tag:
     Type: String
@@ -2884,7 +3015,7 @@ def handler(event, context):
 
 def handler(event, context):
     return {"statusCode": 200, "body": json.dumps({"hello": "world2"})}"""
-    docker_file_content = """FROM public.ecr.aws/lambda/python:3.7
+    docker_file_content = """FROM public.ecr.aws/lambda/python:3.11
 COPY main.py ./"""
     container_mode = ContainersInitializationMode.LAZY.value
     build_before_invoke = True
@@ -3087,3 +3218,55 @@ class TestWarmContainersRemoteLayersLazyInvoke(WarmContainersWithRemoteLayersBas
         response = requests.get(self.url + "/", timeout=300)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content.decode("utf-8"), '"Layer1"')
+
+
+class TestWarmContainersMultipleRemoteLayersInvoke(WarmContainersWithRemoteLayersBase):
+    template_path = "/testdata/start_api/template-warm-containers-multi-layers.yaml"
+    container_mode = ContainersInitializationMode.EAGER.value
+    mode_env_variable = str(uuid.uuid4())
+    parameter_overrides = {"ModeEnvVariable": mode_env_variable}
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_can_invoke_lambda_layer_successfully(self):
+        response = requests.get(self.url + "/", timeout=300)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content.decode("utf-8"), '"Layer1"')
+
+
+class TestDisableAuthorizer(StartApiIntegBaseClass):
+    # integration test for scenario: 'sam local start-api --disable-authorizer'
+    template_path = "/testdata/start_api/lambda_authorizers/serverless-api-props.yaml"
+    disable_authorizer = True
+
+    def setUp(self):
+        self.url = "http://127.0.0.1:{}".format(self.port)
+        self.current_svn_str = HTTPConnection._http_vsn_str
+        HTTPConnection._http_vsn_str = "HTTP/1.0"
+
+    def tearDown(self) -> None:
+        HTTPConnection._http_vsn_str = self.current_svn_str  # type: ignore
+
+    @pytest.mark.timeout(timeout=600, method="thread")
+    @pytest.mark.flaky(reruns=3)
+    def test_function_call_ignores_authorizer_invocation_when_disable_authorizers_is_enabled(self):
+        body = {"requestContext": {"authorizer": {"passed": "Hello World"}}}
+        response = requests.get(self.url + "/requestauthorizer", data=body, timeout=300)
+        # The invocation should skip the authorizer and go direct to the hello world lambda handler
+        self.assertEqual(response.status_code, 200)
+
+
+class TestStartApiDebugPortsConfigFile(StartApiIntegBaseClass):
+    template_path = "/testdata/start_api/serverless-sample-output.yaml"
+    config_file = "debug-config.toml"
+
+    def setUp(self):
+        self.url = "http://127.0.0.1:{}".format(self.port)
+
+    @pytest.mark.flaky(reruns=3)
+    @pytest.mark.timeout(timeout=600, method="thread")
+    def test_starts_process_successfully(self):
+        response = requests.get(self.url + "/hello-world", timeout=300)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"hello": "world"})

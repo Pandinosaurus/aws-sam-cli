@@ -6,15 +6,15 @@ import logging
 
 import click
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import aws_creds_options, pass_context, print_cmdline_args
 from samcli.cli.main import common_options as cli_framework_options
-from samcli.commands._utils.experimental import ExperimentalFlag, is_experimental_enabled
 from samcli.commands._utils.option_value_processor import process_image_options
 from samcli.commands._utils.options import (
     generate_next_command_recommendation,
     hook_name_click_option,
     skip_prepare_infra_option,
+    terraform_plan_file_option,
 )
 from samcli.commands.local.cli_common.options import (
     invoke_common_options,
@@ -26,7 +26,7 @@ from samcli.commands.local.lib.exceptions import InvalidIntermediateImageError
 from samcli.commands.local.start_lambda.core.command import InvokeLambdaCommand
 from samcli.lib.telemetry.metric import track_command
 from samcli.lib.utils.version_checker import check_newer_version
-from samcli.local.docker.exceptions import ContainerNotStartableException
+from samcli.local.docker.exceptions import ContainerNotStartableException, PortAlreadyInUse, ProcessSigTermException
 
 LOG = logging.getLogger(__name__)
 
@@ -52,7 +52,8 @@ DESCRIPTION = """
     requires_credentials=False,
     context_settings={"max_content_width": 120},
 )
-@configuration_option(provider=TomlProvider(section="parameters"))
+@configuration_option(provider=ConfigProvider(section="parameters"))
+@terraform_plan_file_option
 @hook_name_click_option(
     force_prepare=False, invalid_coexist_options=["t", "template-file", "template", "parameter-overrides"]
 )
@@ -63,6 +64,7 @@ DESCRIPTION = """
 @local_common_options
 @cli_framework_options
 @aws_creds_options
+@save_params_option
 @pass_context
 @track_command
 @check_newer_version
@@ -86,6 +88,7 @@ def cli(
     skip_pull_image,
     force_image_build,
     parameter_overrides,
+    save_params,
     config_file,
     config_env,
     warm_containers,
@@ -93,9 +96,12 @@ def cli(
     debug_function,
     container_host,
     container_host_interface,
+    add_host,
     invoke_image,
     hook_name,
     skip_prepare_infra,
+    terraform_plan_file,
+    no_memory_limit,
 ):
     """
     `sam local start-lambda` command entry point
@@ -124,8 +130,10 @@ def cli(
         debug_function,
         container_host,
         container_host_interface,
+        add_host,
         invoke_image,
         hook_name,
+        no_memory_limit,
     )  # pragma: no cover
 
 
@@ -151,8 +159,10 @@ def do_cli(  # pylint: disable=R0914
     debug_function,
     container_host,
     container_host_interface,
+    add_host,
     invoke_image,
     hook_name,
+    no_mem_limit,
 ):
     """
     Implementation of the ``cli`` method, just separated out for unit testing purposes
@@ -165,14 +175,6 @@ def do_cli(  # pylint: disable=R0914
     from samcli.commands.validate.lib.exceptions import InvalidSamDocumentException
     from samcli.lib.providers.exceptions import InvalidLayerReference
     from samcli.local.docker.lambda_debug_settings import DebuggingNotSupported
-
-    if (
-        hook_name
-        and ExperimentalFlag.IaCsSupport.get(hook_name) is not None
-        and not is_experimental_enabled(ExperimentalFlag.IaCsSupport.get(hook_name))
-    ):
-        LOG.info("Terraform Support beta feature is not enabled.")
-        return
 
     LOG.debug("local start_lambda command is called")
 
@@ -204,7 +206,9 @@ def do_cli(  # pylint: disable=R0914
             shutdown=shutdown,
             container_host=container_host,
             container_host_interface=container_host_interface,
+            add_host=add_host,
             invoke_images=processed_invoke_images,
+            no_mem_limit=no_mem_limit,
         ) as invoke_context:
             service = LocalLambdaService(lambda_invoke_context=invoke_context, port=port, host=host)
             service.start()
@@ -223,7 +227,10 @@ def do_cli(  # pylint: disable=R0914
         InvalidLayerReference,
         InvalidIntermediateImageError,
         DebuggingNotSupported,
+        PortAlreadyInUse,
     ) as ex:
         raise UserException(str(ex), wrapped_from=ex.__class__.__name__) from ex
     except ContainerNotStartableException as ex:
         raise UserException(str(ex), wrapped_from=ex.__class__.__name__) from ex
+    except ProcessSigTermException:
+        LOG.debug("Successfully exited SIGTERM terminated process")

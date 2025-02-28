@@ -2,6 +2,7 @@
 Tests for StreamWriter
 """
 
+from io import BytesIO, TextIOWrapper
 from unittest import TestCase
 
 from samcli.lib.utils.stream_writer import StreamWriter
@@ -11,13 +12,42 @@ from unittest.mock import Mock
 
 class TestStreamWriter(TestCase):
     def test_must_write_to_stream(self):
-        buffer = "something"
+        buffer = b"something"
         stream_mock = Mock()
 
         writer = StreamWriter(stream_mock)
-        writer.write(buffer)
+        writer.write_str(buffer.decode("utf-8"))
 
-        stream_mock.write.assert_called_once_with(buffer)
+        stream_mock.write.assert_called_once_with(buffer.decode("utf-8"))
+
+    def test_must_write_to_stream_bytes(self):
+        img_bytes = b"\xff\xab\x11"
+        stream_mock = Mock()
+        byte_stream_mock = Mock(spec=BytesIO)
+
+        writer = StreamWriter(stream_mock, byte_stream_mock)
+        writer.write_bytes(img_bytes)
+
+        byte_stream_mock.write.assert_called_once_with(img_bytes)
+
+    def test_must_write_to_stream_bytes_for_stdout(self):
+        img_bytes = b"\xff\xab\x11"
+        stream_mock = Mock()
+        byte_stream_mock = Mock(spec=TextIOWrapper)
+
+        writer = StreamWriter(stream_mock, byte_stream_mock)
+        writer.write_bytes(img_bytes)
+
+        byte_stream_mock.buffer.write.assert_called_once_with(img_bytes)
+
+    def test_must_not_write_to_stream_bytes_if_not_defined(self):
+        img_bytes = b"\xff\xab\x11"
+        stream_mock = Mock()
+
+        writer = StreamWriter(stream_mock)
+        writer.write_bytes(img_bytes)
+
+        stream_mock.write.assert_not_called()
 
     def test_must_flush_underlying_stream(self):
         stream_mock = Mock()
@@ -31,7 +61,7 @@ class TestStreamWriter(TestCase):
         stream_mock = Mock()
 
         writer = StreamWriter(stream_mock)
-        writer.write("something")
+        writer.write_str("something")
 
         stream_mock.flush.assert_not_called()
 
@@ -43,9 +73,9 @@ class TestStreamWriter(TestCase):
 
         lines = ["first", "second", "third"]
 
-        writer = StreamWriter(stream_mock, True)
+        writer = StreamWriter(stream_mock, auto_flush=True)
 
         for line in lines:
-            writer.write(line)
+            writer.write_str(line)
             flush_mock.assert_called_once_with()
             flush_mock.reset_mock()

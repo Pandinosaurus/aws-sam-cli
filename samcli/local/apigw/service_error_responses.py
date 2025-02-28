@@ -1,6 +1,10 @@
 """Class container to hold common Service Responses"""
 
+import logging
+
 from flask import Response, jsonify, make_response
+
+LOG = logging.getLogger(__name__)
 
 
 class ServiceErrorResponses:
@@ -10,6 +14,7 @@ class ServiceErrorResponses:
     _MISSING_LAMBDA_AUTH_IDENTITY_SOURCES = {"message": "Unauthorized"}
     _LAMBDA_AUTHORIZER_NOT_AUTHORIZED = {"message": "User is not authorized to access this resource"}
 
+    HTTP_STATUS_CODE_500 = 500
     HTTP_STATUS_CODE_501 = 501
     HTTP_STATUS_CODE_502 = 502
     HTTP_STATUS_CODE_403 = 403
@@ -50,8 +55,19 @@ class ServiceErrorResponses:
 
         :return: A Flask Response
         """
+        LOG.debug("Lambda execution failed %s", args)
         response_data = jsonify(ServiceErrorResponses._LAMBDA_FAILURE)
         return make_response(response_data, ServiceErrorResponses.HTTP_STATUS_CODE_502)
+
+    @staticmethod
+    def lambda_body_failure_response(*args):
+        """
+        Helper function to create a Lambda Body Failure Response
+
+        :return: A Flask Response
+        """
+        response_data = jsonify(ServiceErrorResponses._LAMBDA_FAILURE)
+        return make_response(response_data, ServiceErrorResponses.HTTP_STATUS_CODE_500)
 
     @staticmethod
     def not_implemented_locally(message):
@@ -85,3 +101,12 @@ class ServiceErrorResponses:
         """
         response_data = jsonify(ServiceErrorResponses._MISSING_AUTHENTICATION)
         return make_response(response_data, ServiceErrorResponses.HTTP_STATUS_CODE_403)
+
+    @staticmethod
+    def container_creation_failed(message):
+        """
+        Constuct a Flask Response for when container creation fails for a Lambda Function
+        :return: a Flask Response
+        """
+        response_data = jsonify({"message": message})
+        return make_response(response_data, ServiceErrorResponses.HTTP_STATUS_CODE_501)

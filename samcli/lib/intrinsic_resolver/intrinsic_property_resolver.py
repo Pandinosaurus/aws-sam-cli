@@ -1,6 +1,7 @@
 """
 Process and simplifies CloudFormation intrinsic properties such as FN::* and Ref
 """
+
 import base64
 import copy
 import logging
@@ -491,7 +492,7 @@ class IntrinsicResolver:
         )
 
         second_level_value = top_level_value.get(second_level_key)
-        verify_intrinsic_type_str(
+        verify_non_null(
             second_level_value,
             IntrinsicResolver.FN_FIND_IN_MAP,
             message="The SecondLevelKey is missing in the Mappings dictionary in Fn::FindInMap  "

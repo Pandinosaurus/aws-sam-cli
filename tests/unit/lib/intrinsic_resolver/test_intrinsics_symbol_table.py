@@ -1,10 +1,11 @@
 from unittest import TestCase
-
 from unittest.mock import patch
 
-from samcli.lib.intrinsic_resolver.invalid_intrinsic_exception import InvalidSymbolException
+from parameterized import parameterized
+
 from samcli.lib.intrinsic_resolver.intrinsic_property_resolver import IntrinsicResolver
 from samcli.lib.intrinsic_resolver.intrinsics_symbol_table import IntrinsicsSymbolTable
+from samcli.lib.intrinsic_resolver.invalid_intrinsic_exception import InvalidSymbolException
 
 
 class TestIntrinsicsSymbolTablePseudoProperties(TestCase):
@@ -89,6 +90,25 @@ class TestSymbolResolution(TestCase):
 
         self.assertEqual(result, "MyApi")
 
+    def test_default_type_resolver_function_alias(self):
+        template = {
+            "Resources": {
+                "TestFunction17441592": {
+                    "Type": "AWS::Lambda::Function",
+                },
+                "TestFunctionAlias31D71541": {
+                    "Type": "AWS::Lambda::Alias",
+                    "Properties": {
+                        "FunctionName": {"Ref": "TestFunction17441592"},
+                    },
+                },
+            }
+        }
+        symbol_resolver = IntrinsicsSymbolTable(template=template)
+        result = symbol_resolver.resolve_symbols("TestFunctionAlias31D71541", "Ref")
+
+        self.assertEqual(result, "arn:aws:lambda:us-east-1:123456789012:function:TestFunction17441592")
+
     def test_custom_attribute_resolver(self):
         template = {"Resources": {"MyApi": {"Type": "AWS::ApiGateway::RestApi"}}}
         common_attribute_resolver = {"Arn": "test"}
@@ -102,6 +122,18 @@ class TestSymbolResolution(TestCase):
         symbol_resolver = IntrinsicsSymbolTable(template={})
         res = symbol_resolver.get_translation("UNKNOWN MAP")
         self.assertEqual(res, None)
+
+    @parameterized.expand([(["my-origin.com", "my-second-origin.com"],), ("my-origin.com, my-second-origin.com",)])
+    def test_comma_delimited_list(self, logical_id_translator_target):
+        template = {
+            "Parameters": {"Test": {"Default": "my-origin.com,my-second-origin.com", "Type": "CommaDelimitedList"}},
+        }
+
+        symbol_resolver = IntrinsicsSymbolTable(
+            template=template, logical_id_translator={"Test": logical_id_translator_target}
+        )
+        res = symbol_resolver.get_translation("Test")
+        self.assertEqual(res, ["my-origin.com", "my-second-origin.com"])
 
     def test_basic_symbol_translation(self):
         symbol_resolver = IntrinsicsSymbolTable(template={}, logical_id_translator={"item": "test"})

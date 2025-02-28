@@ -43,7 +43,8 @@ Resources:
           - Arn
       FunctionName: HelloWorldFunction
       Handler: main.handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - helloworldfunctionServiceRole306F1141
     Metadata:
@@ -423,7 +424,8 @@ Resources:
           - Arn
       FunctionName: EchoEventFunction
       Handler: main.echo_event_handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - echoeventfunctionServiceRole47C73665
     Metadata:
@@ -812,7 +814,8 @@ Resources:
           - Arn
       FunctionName: EchoEventFunction2
       Handler: main.echo_event_handler_2
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - echoeventfunction2ServiceRoleCF3FCF98
     Metadata:
@@ -1005,7 +1008,8 @@ Resources:
           - Arn
       FunctionName: EchoIntegerBodyFunction
       Handler: main.echo_integer_body
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - echointegerbodyfunctionServiceRole686B7DCD
     Metadata:
@@ -1198,7 +1202,8 @@ Resources:
           - Arn
       FunctionName: ContentTypeSetterFunction
       Handler: main.content_type_setter_handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - contenttypesetterfunctionServiceRole9494BDDA
     Metadata:
@@ -1391,7 +1396,8 @@ Resources:
           - Arn
       FunctionName: OnlySetStatusCodeFunction
       Handler: main.only_set_status_code_handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - onlysetstatuscodefunctionServiceRole3427497E
     Metadata:
@@ -1584,7 +1590,8 @@ Resources:
           - Arn
       FunctionName: OnlySetBodyFunction
       Handler: main.only_set_body_handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - onlysetbodyfunctionServiceRole1C4259D7
     Metadata:
@@ -1777,7 +1784,8 @@ Resources:
           - Arn
       FunctionName: StringStatusCodeFunction
       Handler: main.string_status_code_handler
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - stringstatuscodefunctionServiceRoleF56162DC
     Metadata:
@@ -1970,7 +1978,7 @@ Resources:
           - Arn
       FunctionName: SleepFunction0
       Handler: main.sleep_10_sec_handler
-      Runtime: python3.8
+      Runtime: python3.9
       Timeout: 600
     DependsOn:
       - sleep10secfunctionServiceRole0DDC3333
@@ -2175,7 +2183,7 @@ Resources:
           - Arn
       FunctionName: SleepFunction1
       Handler: main.sleep_10_sec_handler
-      Runtime: python3.8
+      Runtime: python3.9
       Timeout: 600
     DependsOn:
       - sleepfunction1ServiceRoleCCAD8A5E
@@ -2380,7 +2388,8 @@ Resources:
           - Arn
       FunctionName: WriteToStderrFunction
       Handler: main.write_to_stderr
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - writetostderrServiceRoleD7C9BDAE
     Metadata:
@@ -2573,7 +2582,8 @@ Resources:
           - Arn
       FunctionName: WriteToStdoutFunction
       Handler: main.write_to_stdout
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - writetostdoutfunctionServiceRoleE2F60DD4
     Metadata:
@@ -2766,7 +2776,8 @@ Resources:
           - Arn
       FunctionName: InvalidResponseFromLambdaFunction
       Handler: main.invalid_response_returned
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - invalidresponsereturnedfunctionServiceRole84CA52A7
     Metadata:
@@ -2959,7 +2970,8 @@ Resources:
           - Arn
       FunctionName: InvalidResponseHashFromLambdaFunction
       Handler: main.invalid_hash_response
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - invalidhashresponsefunctionServiceRoleD5BA0280
     Metadata:
@@ -3152,7 +3164,8 @@ Resources:
           - Arn
       FunctionName: Base64ResponseFunction
       Handler: main.base64_response
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - base64responsefunctionServiceRole22C52018
     Metadata:
@@ -3345,7 +3358,8 @@ Resources:
           - Arn
       FunctionName: EchoBase64EventBodyFunction
       Handler: main.echo_base64_event_body
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - echobase64eventbodyfunctionServiceRoleAF0B2DEC
     Metadata:
@@ -3538,7 +3552,8 @@ Resources:
           - Arn
       FunctionName: MultipleHeadersResponseFunction
       Handler: main.multiple_headers
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - multipleheadersfunctionServiceRoleA8A47400
     Metadata:
@@ -3731,7 +3746,8 @@ Resources:
           - Arn
       FunctionName: MultipleHeadersOverridesHeadersResponseFunction
       Handler: main.multiple_headers_overrides_headers
-      Runtime: python3.8
+      Runtime: python3.9
+      Timeout: 600
     DependsOn:
       - multipleheadersoverridesheadersfunctionServiceRole8A1BD492
     Metadata:

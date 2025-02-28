@@ -56,3 +56,14 @@ def execute_git(event, context):
     assert return_code == 0
 
     return "git init passed"
+
+
+def no_response(event, context):
+    print("lambda called")
+
+
+def image_handler(event, context):
+    with open("image-for-lambda.png", "rb") as f:
+        image_bytes = f.read()
+        
+    return image_bytes

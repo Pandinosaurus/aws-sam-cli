@@ -1,13 +1,14 @@
 """
 Init command to scaffold a project app from a template
 """
+
 import json
 import logging
 from json import JSONDecodeError
 
 import click
 
-from samcli.cli.cli_config_file import TomlProvider, configuration_option
+from samcli.cli.cli_config_file import ConfigProvider, configuration_option, save_params_option
 from samcli.cli.main import common_options, pass_context, print_cmdline_args
 from samcli.commands._utils.click_mutex import ClickMutex
 from samcli.commands.init.core.command import InitCommand
@@ -106,13 +107,14 @@ def non_interactive_validation(func):
 
 @click.command(
     "init",
+    help=HELP_TEXT,
     short_help=HELP_TEXT,
     context_settings={"max_content_width": 120},
     cls=InitCommand,
     description=DESCRIPTION,
     requires_credentials=False,
 )
-@configuration_option(provider=TomlProvider(section="parameters"))
+@configuration_option(provider=ConfigProvider(section="parameters"))
 @click.option(
     "--no-interactive",
     is_flag=True,
@@ -225,7 +227,13 @@ def non_interactive_validation(func):
     default=None,
     help="Enable CloudWatch Application Insights monitoring for application.",
 )
+@click.option(
+    "--structured-logging/--no-structured-logging",
+    default=None,
+    help="Enable Structured Logging for application.",
+)
 @common_options
+@save_params_option
 @non_interactive_validation
 @pass_context
 @track_command
@@ -247,6 +255,8 @@ def cli(
     extra_context,
     tracing,
     application_insights,
+    structured_logging,
+    save_params,
     config_file,
     config_env,
 ):
@@ -270,6 +280,7 @@ def cli(
         extra_context,
         tracing,
         application_insights,
+        structured_logging,
     )  # pragma: no cover
 
 
@@ -291,6 +302,7 @@ def do_cli(
     extra_context,
     tracing,
     application_insights,
+    structured_logging,
 ):
     """
     Implementation of the ``cli`` method
@@ -343,6 +355,7 @@ def do_cli(
             extra_context,
             tracing,
             application_insights,
+            structured_logging,
         )
     else:
         if not (pt_explicit or runtime or dependency_manager or base_image or architecture):
@@ -363,6 +376,7 @@ def do_cli(
             no_input,
             tracing,
             application_insights,
+            structured_logging,
         )
 
 

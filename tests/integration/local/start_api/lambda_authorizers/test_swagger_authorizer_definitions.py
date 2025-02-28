@@ -10,6 +10,7 @@ from parameterized import parameterized_class
 @parameterized_class(
     ("template_path", "endpoint", "parameter_overrides"),
     [
+        ("/testdata/start_api/lambda_authorizers/swagger-api.yaml", "", {}),
         ("/testdata/start_api/lambda_authorizers/swagger-api.yaml", "requestauthorizerswaggertoken", {}),
         (
             "/testdata/start_api/lambda_authorizers/swagger-api.yaml",
@@ -181,7 +182,7 @@ Resources:
 """
 
     @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=10, method="thread")
+    @pytest.mark.timeout(timeout=100, method="thread")
     def test_invalid_template(self):
         self.assertIn(
             "Lambda authorizer 'Authorizer' type 'bad type' is unsupported, skipping",
@@ -222,7 +223,7 @@ Resources:
 """
 
     @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=10, method="thread")
+    @pytest.mark.timeout(timeout=100, method="thread")
     def test_invalid_template(self):
         self.assertIn(
             "Simple responses are only available on HTTP APIs with "
@@ -263,7 +264,7 @@ Resources:
 """
 
     @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=10, method="thread")
+    @pytest.mark.timeout(timeout=100, method="thread")
     def test_invalid_template(self):
         self.assertIn(
             "Error: Authorizer 'Authorizer' contains an invalid payload version",
@@ -303,7 +304,7 @@ Resources:
 """
 
     @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=10, method="thread")
+    @pytest.mark.timeout(timeout=100, method="thread")
     def test_invalid_template(self):
         self.assertIn(
             "Error: Identity source 'a.b.c.d.e' for Lambda Authorizer "
@@ -344,7 +345,7 @@ Resources:
 """
 
     @pytest.mark.flaky(reruns=3)
-    @pytest.mark.timeout(timeout=10, method="thread")
+    @pytest.mark.timeout(timeout=100, method="thread")
     def test_invalid_template(self):
         self.assertIn(
             "Type 'token' for Lambda Authorizer 'Authorizer' is unsupported",

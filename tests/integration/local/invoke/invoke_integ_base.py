@@ -42,6 +42,7 @@ class InvokeIntegBase(TestCase):
         invoke_image=None,
         hook_name=None,
         beta_features=None,
+        terraform_plan_file=None,
     ):
         command_list = [get_sam_command(), "local", "invoke", function_to_invoke]
 
@@ -84,6 +85,9 @@ class InvokeIntegBase(TestCase):
         if beta_features is not None:
             command_list = command_list + ["--beta-features" if beta_features else "--no-beta-features"]
 
+        if terraform_plan_file:
+            command_list += ["--terraform-plan-file", terraform_plan_file]
+
         return command_list
 
     def get_build_command_list(
@@ -92,6 +96,8 @@ class InvokeIntegBase(TestCase):
         cached=None,
         parallel=None,
         use_container=None,
+        build_dir=None,
+        build_in_source=None,
     ):
         command_list = [self.cmd, "build"]
 
@@ -107,13 +113,30 @@ class InvokeIntegBase(TestCase):
         if use_container:
             command_list = command_list + ["-u"]
 
+        if build_dir:
+            command_list = command_list + ["-b", build_dir]
+
+        if build_in_source:
+            command_list = command_list + ["--build-in-source"]
+
         return command_list
 
-    def run_command(self, command_list, env=None):
-        process = Popen(command_list, stdout=PIPE, env=env)
+    def run_command(self, command_list, env=None, cwd=None):
+        process = Popen(command_list, stdout=PIPE, env=env, cwd=cwd)
         try:
             (stdout, stderr) = process.communicate(timeout=TIMEOUT)
             return stdout, stderr, process.returncode
         except TimeoutExpired:
             process.kill()
             raise
+
+
+class IntegrationCliIntegBase(InvokeIntegBase):
+    def assert_is_account_id_valid(self, account_id: str):
+        try:
+            int(account_id)
+        except ValueError:
+            self.fail(f"Account ID '{account_id}' is not a valid number")
+
+        # AWS account IDs have length of 12
+        self.assertEqual(len(account_id), 12)

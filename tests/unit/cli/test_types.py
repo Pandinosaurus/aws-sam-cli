@@ -1,5 +1,5 @@
 from unittest import TestCase
-from unittest.mock import Mock, ANY
+from unittest.mock import MagicMock, Mock, ANY, patch
 
 from click import BadParameter
 from parameterized import parameterized
@@ -10,8 +10,12 @@ from samcli.cli.types import (
     SigningProfilesOptionType,
     ImageRepositoryType,
     ImageRepositoriesType,
+    RemoteInvokeBotoApiParameterType,
+    RemoteInvokeOutputFormatType,
+    SyncWatchExcludeType,
 )
 from samcli.cli.types import CfnMetadataType
+from samcli.lib.remote_invoke.remote_invoke_executors import RemoteInvokeOutputFormat
 
 
 class TestCfnParameterOverridesType(TestCase):
@@ -234,11 +238,41 @@ class TestCfnTags(TestCase):
                 ["stage=int", "company:application=awesome-service", "company:department=engineering"],
                 {"stage": "int", "company:application": "awesome-service", "company:department": "engineering"},
             ),
+            # input as string with multiple key-values including spaces
+            (('tag1="son of anton" tag2="company abc"',), {"tag1": "son of anton", "tag2": "company abc"}),
+            (('tag1="son of anton"   tag2="company abc"',), {"tag1": "son of anton", "tag2": "company abc"}),
+            (('\'tag1="son of anton" tag2="company abc"\'',), {"tag1": "son of anton", "tag2": "company abc"}),
+            (
+                ('tag1="son of anton" tag2="company abc" tag:3="dummy tag"',),
+                {"tag1": "son of anton", "tag2": "company abc", "tag:3": "dummy tag"},
+            ),
         ]
     )
     def test_successful_parsing(self, input, expected):
         result = self.param_type.convert(input, None, None)
         self.assertEqual(result, expected, msg="Failed with Input = " + str(input))
+
+    @parameterized.expand(
+        [
+            (
+                ["stage=int", "company:application=awesome-service", "company:department=engineering"],
+                {"stage": "int", "company:application": "awesome-service", "company:department": "engineering"},
+            ),
+            (
+                ['owner:name="son of anton"', "company:application=awesome-service", "company:department=engineering"],
+                {
+                    "owner:name": "son of anton",
+                    "company:application": "awesome-service",
+                    "company:department": "engineering",
+                },
+            ),
+        ]
+    )
+    @patch("re.findall")
+    def test_no_regex_parsing_if_input_is_list(self, input, expected, regex_mock):
+        result = self.param_type.convert(input, None, None)
+        self.assertEqual(result, expected, msg="Failed with Input = " + str(input))
+        regex_mock.assert_not_called()
 
 
 class TestCfnTagsMultipleValues(TestCase):
@@ -441,3 +475,104 @@ class TestImageRepositoriesType(TestCase):
     def test_successful_parsing(self, input, expected):
         result = self.param_type.convert(input, self.mock_param, Mock())
         self.assertEqual(result, expected, msg="Failed with Input = " + str(input))
+
+
+class TestRemoteInvokeBotoApiParameterType(TestCase):
+    def setUp(self):
+        self.param_type = RemoteInvokeBotoApiParameterType()
+        self.mock_param = Mock(opts=["--parameter"])
+
+    @parameterized.expand(
+        [
+            # Just a string
+            ("some string"),
+            # no parameter value
+            ("no-value"),
+        ]
+    )
+    def test_must_fail_on_invalid_format(self, input):
+        self.param_type.fail = Mock()
+        with self.assertRaises(BadParameter):
+            self.param_type.convert(input, self.mock_param, Mock())
+
+    @parameterized.expand(
+        [
+            (
+                "Parameter1=Value1",
+                {"Parameter1": "Value1"},
+            ),
+            (
+                'Parameter1=\'{"a":54, "b": 28}\'',
+                {"Parameter1": '\'{"a":54, "b": 28}\''},
+            ),
+            (
+                "Parameter1=base-64-encoded==",
+                {"Parameter1": "base-64-encoded=="},
+            ),
+        ]
+    )
+    def test_successful_parsing(self, input, expected):
+        result = self.param_type.convert(input, self.mock_param, Mock())
+        self.assertEqual(result, expected)
+
+
+class TestRemoteInvokeOutputFormatParameterType(TestCase):
+    def setUp(self):
+        self.param_type = RemoteInvokeOutputFormatType(enum=RemoteInvokeOutputFormat)
+        self.mock_param = Mock(opts=["--output-format"])
+
+    @parameterized.expand(
+        [
+            ("string"),
+            ("some string"),
+            ("non-default"),
+        ]
+    )
+    def test_must_fail_on_invalid_values(self, input):
+        with self.assertRaises(BadParameter):
+            self.param_type.convert(input, self.mock_param, None)
+
+    @parameterized.expand(
+        [
+            (
+                "text",
+                RemoteInvokeOutputFormat.TEXT,
+            ),
+            (
+                "json",
+                RemoteInvokeOutputFormat.JSON,
+            ),
+        ]
+    )
+    def test_successful_parsing(self, input, expected):
+        result = self.param_type.convert(input, self.mock_param, None)
+        self.assertEqual(result, expected)
+
+
+class TestSyncWatchExcludeType(TestCase):
+    def setUp(self):
+        self.exclude_type = SyncWatchExcludeType()
+
+    @parameterized.expand(
+        [
+            ("HelloWorldFunction=file.txt", {"HelloWorldFunction": ["file.txt"]}),
+            ({"HelloWorldFunction": ["file.txt"]}, {"HelloWorldFunction": ["file.txt"]}),
+        ]
+    )
+    def test_convert_parses_input(self, input, expected):
+        result = self.exclude_type.convert(input, MagicMock(), MagicMock())
+
+        self.assertEqual(result, expected)
+
+    @parameterized.expand(
+        [
+            ("not a key value pair",),
+            ("",),
+            ("key=",),
+            ("=value",),
+            ("key=value=foo=bar",),
+        ]
+    )
+    def test_convert_fails_parse_input(self, input):
+        with self.assertRaises(BadParameter):
+            self.exclude_type.convert(input, MagicMock(), MagicMock())

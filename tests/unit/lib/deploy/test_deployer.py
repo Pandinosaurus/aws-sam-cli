@@ -343,7 +343,7 @@ class TestDeployer(CustomTestCase):
         self.deployer._client.get_waiter = MagicMock(return_value=MockChangesetWaiter())
         self.deployer.wait_for_changeset("test-id", "test-stack")
 
-    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})
+    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})  # type: ignore
     def test_wait_for_changeset_client_sleep(self):
         deployer = Deployer(MagicMock().client("cloudformation"), client_sleep=os.getenv("SAM_CLI_POLL_DELAY", 0.5))
         deployer._client.get_waiter = MagicMock(return_value=MockChangesetWaiter())
@@ -358,7 +358,7 @@ class TestDeployer(CustomTestCase):
             ChangeSetName="test-id", StackName="test-stack", WaiterConfig={"Delay": 0.5}
         )
 
-    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})
+    @patch("os.environ", {**os.environ, "SAM_CLI_POLL_DELAY": 10})  # type: ignore
     def test_wait_for_changeset_custom_delay(self):
         deployer = Deployer(MagicMock().client("cloudformation"), client_sleep=os.getenv("SAM_CLI_POLL_DELAY"))
         deployer.wait_for_changeset("test-id", "test-stack")
@@ -420,10 +420,11 @@ class TestDeployer(CustomTestCase):
         self.assertEqual(self.deployer.get_last_event_time("test"), utc_to_timestamp(timestamp))
 
     def test_get_last_event_time_unknown_last_time(self):
-        current_timestamp = datetime.utcnow()
+        time_float = time.time()
+        current_timestamp = to_datetime(time_float * 1000)
         self.deployer._client.describe_stack_events = MagicMock(side_effect=KeyError)
         # Convert to milliseconds from seconds
-        last_stack_event_timestamp = to_datetime(self.deployer.get_last_event_time("test") * 1000)
+        last_stack_event_timestamp = to_datetime(self.deployer.get_last_event_time("test", time_float) * 1000)
         self.assertEqual(last_stack_event_timestamp.year, current_timestamp.year)
         self.assertEqual(last_stack_event_timestamp.month, current_timestamp.month)
         self.assertEqual(last_stack_event_timestamp.day, current_timestamp.day)
@@ -1384,7 +1385,7 @@ class TestDeployer(CustomTestCase):
 
         self.assertEqual(self.deployer._client.rollback_stack.call_count, 1)
         self.assertEqual(self.deployer._client.delete_stack.call_count, 1)
-        self.assertEqual(self.deployer._client.describe_stack_events.call_count, 0)
+        self.assertEqual(self.deployer._client.describe_stack_events.call_count, 2)
 
     def test_rollback_invalid_stack_name(self):
         self.deployer._client.describe_stacks = MagicMock(
@@ -1418,3 +1419,64 @@ class TestDeployer(CustomTestCase):
         self.deployer._rollback_wait("test")
 
         self.assertEqual(log_mock.call_count, 1)
+
+    @patch("samcli.lib.deploy.deployer.pprint_columns")
+    def test_show_stabilizing_status(self, patched_pprint_columns):
+        start_timestamp = datetime(2022, 1, 1, 16, 42, 0, 0, timezone.utc)
+
+        self.deployer._client.get_paginator = MagicMock(
+            return_value=MockPaginator(
+                # describe_stack_events is in reverse chronological order
+                [
+                    {
+                        "StackEvents": [
+                            {
+                                "StackId": "arn:aws:cloudformation:us-west-2:123456789012:stack/my-stack-name/...",
+                                "EventId": "1",
+                                "StackName": "my-stack-name",
+                                "LogicalResourceId": "my-stack-name",
+                                "PhysicalResourceId": "arn:aws:cloudformation:us-west-2:123456789012:stack/my-stack-name/...",
+                                "ResourceType": "AWS::CloudFormation::Stack",
+                                "Timestamp": start_timestamp + timedelta(seconds=3),
+                                "ResourceStatus": "CREATE_COMPLETE",
+                            },
+                            {
+                                "StackId": "arn:aws:cloudformation:us-west-2:123456789012:stack/my-stack-name/...",
+                                "EventId": "2",
+                                "StackName": "my-stack-name",
+                                "LogicalResourceId": "mybucket",
+                                "PhysicalResourceId": "arn:aws:cloudformation:region:accountId:stack/test/uuid",
+                                "ResourceType": "AWS::S3::Bucket",
+                                "Timestamp": start_timestamp + timedelta(seconds=2),
+                                "ResourceStatus": "CREATE_IN_PROGRESS",
+                                "DetailedStatus": "CONFIGURATION_COMPLETE",
+                            },
+                            {
+                                "StackId": "arn:aws:cloudformation:us-west-2:123456789012:stack/my-stack-name/...",
+                                "EventId": "3",
+                                "StackName": "my-stack-name",
+                                "LogicalResourceId": "mybucket",
+                                "PhysicalResourceId": "arn:aws:cloudformation:region:accountId:stack/test/uuid",
+                                "ResourceType": "AWS::S3::Bucket",
+                                "Timestamp": start_timestamp + timedelta(seconds=1),
+                                "ResourceStatus": "CREATE_IN_PROGRESS",
+                            },
+                        ]
+                    },
+                ]
+            )
+        )
+        self.deployer.describe_stack_events("test", utc_to_timestamp(start_timestamp))
+        self.assertEqual(patched_pprint_columns.call_count, 3)
+        self.assertListSubset(
+            ["CREATE_IN_PROGRESS", "AWS::S3::Bucket", "mybucket"],
+            patched_pprint_columns.call_args_list[0][1]["columns"],
+        )
+        self.assertListSubset(
+            ["CREATE_IN_PROGRESS - CONFIGURATION_COMPLETE", "AWS::S3::Bucket", "mybucket"],
+            patched_pprint_columns.call_args_list[1][1]["columns"],
+        )
+        self.assertListSubset(
+            ["CREATE_COMPLETE", "AWS::CloudFormation::Stack", "my-stack-name"],
+            patched_pprint_columns.call_args_list[2][1]["columns"],
+        )

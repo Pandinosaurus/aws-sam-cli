@@ -16,7 +16,9 @@ class Test_get_workflow_config(TestCase):
         self.project_dir = ""
         EventTracker.clear_trackers()
 
-    @parameterized.expand([("python3.7",), ("python3.8",)])
+    @parameterized.expand(
+        [("python3.8",), ("python3.9",), ("python3.10",), ("python3.11",), ("python3.12",), ("python3.13",)]
+    )
     def test_must_work_for_python(self, runtime):
         result = get_workflow_config(runtime, self.code_dir, self.project_dir)
         self.assertEqual(result.language, "python")
@@ -28,7 +30,7 @@ class Test_get_workflow_config(TestCase):
         self.assertIn(Event("BuildWorkflowUsed", "python-pip"), EventTracker.get_tracked_events())
         self.assertFalse(result.must_mount_with_write_in_container)
 
-    @parameterized.expand([("nodejs12.x",), ("nodejs14.x",), ("nodejs16.x",), ("nodejs18.x",)])
+    @parameterized.expand([("nodejs16.x",), ("nodejs18.x",), ("nodejs20.x",), ("nodejs22.x",)])
     def test_must_work_for_nodejs(self, runtime):
         result = get_workflow_config(runtime, self.code_dir, self.project_dir)
         self.assertEqual(result.language, "nodejs")
@@ -64,12 +66,12 @@ class Test_get_workflow_config(TestCase):
         self.assertIn(Event("BuildWorkflowUsed", "dotnet-cli-package"), EventTracker.get_tracked_events())
         self.assertTrue(result.must_mount_with_write_in_container)
 
-    @parameterized.expand([("dotnetcore3.1",), ("dotnet6",), ("provided.al2", "dotnet7")])
+    @parameterized.expand([("dotnet6",), ("provided.al2", "dotnet7")])
     def test_must_mount_with_write_for_dotnet_in_container(self, runtime, specified_workflow=None):
         result = get_workflow_config(runtime, self.code_dir, self.project_dir, specified_workflow)
         self.assertTrue(result.must_mount_with_write_in_container)
 
-    @parameterized.expand([("provided.al2",)])
+    @parameterized.expand([("provided.al2",), ("provided.al2023",)])
     def test_must_work_for_provided_with_build_method_rustcargolambda(self, runtime):
         result = get_workflow_config(runtime, self.code_dir, self.project_dir, specified_workflow="rust-cargolambda")
         self.assertEqual(result.language, "rust")
@@ -99,7 +101,7 @@ class Test_get_workflow_config(TestCase):
         with self.assertRaises(UnsupportedBuilderException):
             get_workflow_config(runtime, self.code_dir, self.project_dir, specified_workflow="Wrong")
 
-    @parameterized.expand([("ruby2.7",)])
+    @parameterized.expand([("ruby3.2",)])
     def test_must_work_for_ruby(self, runtime):
         result = get_workflow_config(runtime, self.code_dir, self.project_dir)
         self.assertEqual(result.language, "ruby")
@@ -112,7 +114,11 @@ class Test_get_workflow_config(TestCase):
         self.assertFalse(result.must_mount_with_write_in_container)
 
     @parameterized.expand(
-        [("java8", "build.gradle", "gradle"), ("java8", "build.gradle.kts", "gradle"), ("java8", "pom.xml", "maven")]
+        [
+            ("java8.al2", "build.gradle", "gradle"),
+            ("java8.al2", "build.gradle.kts", "gradle"),
+            ("java8.al2", "pom.xml", "maven"),
+        ]
     )
     @patch("samcli.lib.build.workflow_config.os")
     def test_must_work_for_java(self, runtime, build_file, dep_manager, os_mock):
@@ -135,7 +141,7 @@ class Test_get_workflow_config(TestCase):
             self.assertIn(Event("BuildWorkflowUsed", "java-maven"), EventTracker.get_tracked_events())
 
     def test_must_get_workflow_for_esbuild(self):
-        runtime = "nodejs12.x"
+        runtime = "nodejs20.x"
         result = get_workflow_config(runtime, self.code_dir, self.project_dir, specified_workflow="esbuild")
         self.assertEqual(result.language, "nodejs")
         self.assertEqual(result.dependency_manager, "npm-esbuild")
@@ -146,7 +152,7 @@ class Test_get_workflow_config(TestCase):
         self.assertIn(Event("BuildWorkflowUsed", "nodejs-npm-esbuild"), EventTracker.get_tracked_events())
         self.assertFalse(result.must_mount_with_write_in_container)
 
-    @parameterized.expand([("java8", "unknown.manifest")])
+    @parameterized.expand([("java8.al2", "unknown.manifest")])
     @patch("samcli.lib.build.workflow_config.os")
     def test_must_fail_when_manifest_not_found(self, runtime, build_file, os_mock):
         os_mock.path.join.side_effect = lambda dirname, v: v

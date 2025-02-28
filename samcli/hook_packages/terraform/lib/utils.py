@@ -1,4 +1,5 @@
 """Terraform utilities"""
+
 import hashlib
 from typing import Any, Dict, List, Union
 
@@ -74,7 +75,7 @@ def _calculate_configuration_attribute_value_hash(
     else:
         sorted_references_list = sorted(
             configuration_attribute_value,
-            key=lambda x: x.value if isinstance(x, ConstantValue) else f"{x.module_address}.{x.value}",  # type: ignore
+            key=lambda x: x.value if isinstance(x, ConstantValue) else f"{x.module_address}.{x.value}",
         )
         for ref in sorted_references_list:
             md5.update(

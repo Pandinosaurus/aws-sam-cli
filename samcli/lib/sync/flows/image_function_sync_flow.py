@@ -1,4 +1,5 @@
 """SyncFlow for Image based Lambda Functions"""
+
 import logging
 from contextlib import ExitStack
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -7,6 +8,7 @@ import docker
 from docker.client import DockerClient
 
 from samcli.lib.build.app_builder import ApplicationBuilder, ApplicationBuildResult
+from samcli.lib.constants import DOCKER_MIN_API_VERSION
 from samcli.lib.package.ecr_uploader import ECRUploader
 from samcli.lib.providers.provider import Stack
 from samcli.lib.sync.flows.function_sync_flow import FunctionSyncFlow, wait_for_function_update_complete
@@ -69,7 +71,7 @@ class ImageFunctionSyncFlow(FunctionSyncFlow):
     def _get_docker_client(self) -> DockerClient:
         """Lazy instantiates and returns the docker client"""
         if not self._docker_client:
-            self._docker_client = docker.from_env()
+            self._docker_client = docker.from_env(version=DOCKER_MIN_API_VERSION)
         return self._docker_client
 
     def _get_ecr_client(self) -> Any:
@@ -81,10 +83,10 @@ class ImageFunctionSyncFlow(FunctionSyncFlow):
     def gather_resources(self) -> None:
         """Build function image and save it in self._image_name"""
         if self._application_build_result:
-            LOG.debug("Using pre-built resources for function {}", self._function_identifier)
+            LOG.debug("Using pre-built resources for function %s", self._function_identifier)
             self._use_prebuilt_resources(self._application_build_result)
         else:
-            LOG.debug("Building function from scratch {}", self._function_identifier)
+            LOG.debug("Building function from scratch %s", self._function_identifier)
             self._build_resources_from_scratch()
 
         if self._image_name:

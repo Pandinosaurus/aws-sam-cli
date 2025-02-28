@@ -1,6 +1,7 @@
 """
 Architecture tools
 """
+
 from typing import TYPE_CHECKING, Dict, List, cast
 
 from samcli.commands.exceptions import UserException
@@ -14,24 +15,28 @@ X86_64 = "x86_64"
 ARM64 = "arm64"
 
 SUPPORTED_RUNTIMES: Dict[str, List[str]] = {
-    "nodejs12.x": [ARM64, X86_64],
-    "nodejs14.x": [ARM64, X86_64],
     "nodejs16.x": [ARM64, X86_64],
     "nodejs18.x": [ARM64, X86_64],
-    "python3.7": [X86_64],
+    "nodejs20.x": [ARM64, X86_64],
+    "nodejs22.x": [ARM64, X86_64],
     "python3.8": [ARM64, X86_64],
     "python3.9": [ARM64, X86_64],
     "python3.10": [ARM64, X86_64],
-    "ruby2.7": [ARM64, X86_64],
-    "java8": [X86_64],
+    "python3.11": [ARM64, X86_64],
+    "python3.12": [ARM64, X86_64],
+    "python3.13": [ARM64, X86_64],
+    "ruby3.2": [ARM64, X86_64],
+    "ruby3.3": [ARM64, X86_64],
     "java8.al2": [ARM64, X86_64],
     "java11": [ARM64, X86_64],
     "java17": [ARM64, X86_64],
+    "java21": [ARM64, X86_64],
     "go1.x": [X86_64],
-    "dotnetcore3.1": [ARM64, X86_64],
     "dotnet6": [ARM64, X86_64],
+    "dotnet8": [ARM64, X86_64],
     "provided": [X86_64],
     "provided.al2": [ARM64, X86_64],
+    "provided.al2023": [ARM64, X86_64],
 }
 
 

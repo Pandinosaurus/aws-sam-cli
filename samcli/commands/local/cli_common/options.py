@@ -1,12 +1,20 @@
 """
 Common CLI options for invoke command
 """
+
 from pathlib import Path
 
 import click
 
-from samcli.commands._utils.options import docker_click_options, parameter_override_click_option, template_click_option
+from samcli.cli.types import DockerAdditionalHostType
+from samcli.commands._utils.options import (
+    docker_click_options,
+    local_add_host_callback,
+    parameter_override_click_option,
+    template_click_option,
+)
 from samcli.commands.local.cli_common.invoke_context import ContainersInitializationMode
+from samcli.local.docker.container import DEFAULT_CONTAINER_HOST_INTERFACE
 
 
 def get_application_dir():
@@ -59,10 +67,22 @@ def local_common_options(f):
         ),
         click.option(
             "--container-host-interface",
-            default="127.0.0.1",
+            default=DEFAULT_CONTAINER_HOST_INTERFACE,
             show_default=True,
             help="IP address of the host network interface that container ports should bind to. "
             "Use 0.0.0.0 to bind to all interfaces.",
+        ),
+        click.option(
+            "--add-host",
+            multiple=True,
+            type=DockerAdditionalHostType(),
+            callback=local_add_host_callback,
+            required=False,
+            help="Passes a hostname to IP address mapping to the Docker container's host file. "
+            "This parameter can be passed multiple times."
+            ""
+            "Example:"
+            "--add-host example.com:127.0.0.1",
         ),
         click.option(
             "--invoke-image",
@@ -72,11 +92,18 @@ def local_common_options(f):
             multiple=True,
             help="Container image URIs for invoking functions or starting api and function. "
             "One can specify the image URI used for the local function invocation "
-            "(--invoke-image public.ecr.aws/sam/build-nodejs14.x:latest). "
+            "(--invoke-image public.ecr.aws/sam/build-nodejs20.x:latest). "
             "One can also specify for each individual function with "
-            "(--invoke-image Function1=public.ecr.aws/sam/build-nodejs14.x:latest). "
+            "(--invoke-image Function1=public.ecr.aws/sam/build-nodejs20.x:latest). "
             "If a function does not have invoke image specified, the default AWS SAM CLI "
             "emulation image will be used.",
+        ),
+        click.option(
+            "--no-memory-limit",
+            default=False,
+            is_flag=True,
+            help="Removes the Memory limit during emulation. "
+            "With this parameter, the underlying container will run without a --memory parameter",
         ),
     ]
 
@@ -166,7 +193,8 @@ def invoke_common_options(f):
             click.option(
                 "--container-env-vars",
                 type=click.Path(exists=True),
-                help="JSON file containing environment variables to be set within the container environment",
+                help="JSON file containing additional environment variables to be set within the container when "
+                "used in a debugging session locally.",
             ),
             click.option(
                 "--docker-volume-basedir",
@@ -231,7 +259,7 @@ def warm_containers_common_options(f):
         click.option(
             "--debug-function",
             help="Optional. Specifies the Lambda Function logicalId to apply debug options to when"
-            " --warm-containers is specified.  This parameter applies to --debug-port, --debugger-path,"
+            " --warm-containers is specified. This parameter applies to --debug-port, --debugger-path,"
             " and --debug-args.",
             type=click.STRING,
             multiple=False,

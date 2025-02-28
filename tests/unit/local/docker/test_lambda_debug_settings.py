@@ -6,21 +6,23 @@ from parameterized import parameterized
 from samcli.local.docker.lambda_debug_settings import DebuggingNotSupported, LambdaDebugSettings, Runtime
 
 _DEBUG_RUNTIMES = [
-    Runtime.java8,
     Runtime.java8al2,
     Runtime.java11,
     Runtime.java17,
-    Runtime.dotnetcore31,
+    Runtime.java21,
     Runtime.dotnet6,
+    Runtime.dotnet8,
     Runtime.go1x,
-    Runtime.nodejs12x,
-    Runtime.nodejs14x,
     Runtime.nodejs16x,
     Runtime.nodejs18x,
-    Runtime.python37,
+    Runtime.nodejs20x,
+    Runtime.nodejs22x,
     Runtime.python38,
     Runtime.python39,
     Runtime.python310,
+    Runtime.python311,
+    Runtime.python312,
+    Runtime.python313,
 ]
 
 

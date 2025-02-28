@@ -1,6 +1,7 @@
 """
 Bootstrap's user's development environment by creating cloud resources required by SAM CLI
 """
+
 import logging
 from collections.abc import Collection
 from typing import Dict, List, Optional, Union, cast
@@ -84,7 +85,7 @@ def update_stack(
     except NoRegionError as ex:
         raise RegionError(
             "Error Setting Up Managed Stack Client: Unable to resolve a region. "
-            "Please provide a region via the --region parameter or by the AWS_REGION environment variable."
+            "Please provide a region via the --region parameter or by the AWS_DEFAULT_REGION environment variable."
         ) from ex
     return _create_or_update_stack(cloudformation_client, stack_name, template_body, parameter_overrides)
 
@@ -140,7 +141,7 @@ def manage_stack(
     except NoRegionError as ex:
         raise RegionError(
             "Error Setting Up Managed Stack Client: Unable to resolve a region. "
-            "Please provide a region via the --region parameter or by the AWS_REGION environment variable."
+            "Please provide a region via the --region parameter or by the AWS_DEFAULT_REGION environment variable."
         ) from ex
     return _create_or_get_stack(cloudformation_client, stack_name, template_body, parameter_overrides)
 

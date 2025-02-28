@@ -1,13 +1,14 @@
 """
 Unit tests for build command utils
 """
+
 from unittest import TestCase
 from unittest.mock import patch
 
 from samcli.commands.build.utils import prompt_user_to_enable_mount_with_write_if_needed
 from samcli.lib.utils.architecture import X86_64
 from samcli.lib.utils.packagetype import ZIP, IMAGE
-from samcli.lib.providers.provider import ResourcesToBuildCollector, Function, LayerVersion
+from samcli.lib.providers.provider import ResourcesToBuildCollector, Function, LayerVersion, FunctionBuildInfo
 
 
 class TestBuildUtils(TestCase):
@@ -52,6 +53,7 @@ class TestBuildUtils(TestCase):
             codesign_config_arn=None,
             function_url_config=None,
             runtime_management_config=None,
+            function_build_info=FunctionBuildInfo.BuildableZip,
         )
 
         resources_to_build = ResourcesToBuildCollector()
@@ -101,6 +103,7 @@ class TestBuildUtils(TestCase):
             codesign_config_arn=None,
             function_url_config=None,
             runtime_management_config=None,
+            function_build_info=FunctionBuildInfo.BuildableZip,
         )
 
         resources_to_build = ResourcesToBuildCollector()
@@ -152,6 +155,7 @@ class TestBuildUtils(TestCase):
             codesign_config_arn=None,
             function_url_config=None,
             runtime_management_config=None,
+            function_build_info=FunctionBuildInfo.BuildableZip,
         )
 
         resources_to_build = ResourcesToBuildCollector()
@@ -201,6 +205,7 @@ class TestBuildUtils(TestCase):
             codesign_config_arn=None,
             function_url_config=None,
             runtime_management_config=None,
+            function_build_info=FunctionBuildInfo.BuildableImage,
         )
 
         resources_to_build = ResourcesToBuildCollector()
@@ -250,6 +255,7 @@ class TestBuildUtils(TestCase):
             codesign_config_arn=None,
             function_url_config=None,
             runtime_management_config=None,
+            function_build_info=FunctionBuildInfo.BuildableZip,
         )
 
         resources_to_build = ResourcesToBuildCollector()

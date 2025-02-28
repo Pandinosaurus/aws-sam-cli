@@ -44,8 +44,12 @@ class BuildStrategyBaseTest(TestCase):
         self.function2.get_build_dir = Mock()
         self.function2.full_path = "function2"
 
-        self.function_build_definition1 = FunctionBuildDefinition("runtime", "codeuri", ZIP, X86_64, {}, "handler")
-        self.function_build_definition2 = FunctionBuildDefinition("runtime2", "codeuri", ZIP, X86_64, {}, "handler")
+        self.function_build_definition1 = FunctionBuildDefinition(
+            "runtime", "codeuri", None, ZIP, X86_64, {}, "handler"
+        )
+        self.function_build_definition2 = FunctionBuildDefinition(
+            "runtime2", "codeuri", None, ZIP, X86_64, {}, "handler"
+        )
 
         self.function_build_definition1.add_function(self.function1_1)
         self.function_build_definition1.add_function(self.function1_2)
@@ -56,7 +60,9 @@ class BuildStrategyBaseTest(TestCase):
         self.build_graph.put_function_build_definition(self.function_build_definition2, self.function2)
 
         self.layer1 = Mock()
+        self.layer1.compatible_architectures = None
         self.layer2 = Mock()
+        self.layer2.compatible_architectures = None
 
         self.layer_build_definition1 = LayerBuildDefinition("layer1", "codeuri", "build_method", [], X86_64)
         self.layer_build_definition2 = LayerBuildDefinition("layer2", "codeuri", "build_method", [], X86_64)
@@ -216,6 +222,7 @@ class DefaultBuildStrategyTest(BuildStrategyBaseTest):
                 call(
                     self.function_build_definition1.get_function_name(),
                     self.function_build_definition1.codeuri,
+                    self.function_build_definition1.imageuri,
                     ZIP,
                     self.function_build_definition1.runtime,
                     self.function_build_definition1.architecture,
@@ -229,6 +236,7 @@ class DefaultBuildStrategyTest(BuildStrategyBaseTest):
                 call(
                     self.function_build_definition2.get_function_name(),
                     self.function_build_definition2.codeuri,
+                    self.function_build_definition2.imageuri,
                     ZIP,
                     self.function_build_definition2.runtime,
                     self.function_build_definition2.architecture,
@@ -321,7 +329,7 @@ class DefaultBuildStrategyTest(BuildStrategyBaseTest):
         function2.full_path = "Function2"
         function2.packagetype = IMAGE
         build_definition = FunctionBuildDefinition(
-            "3.7", "codeuri", IMAGE, X86_64, {}, "handler", env_vars={"FOO": "BAR"}
+            "3.12", "codeuri", "imageuri", IMAGE, X86_64, {}, "handler", env_vars={"FOO": "BAR"}
         )
         # since they have the same metadata, they are put into the same build_definition.
         build_definition.functions = [function1, function2]
@@ -341,7 +349,8 @@ class CachedBuildStrategyTest(BuildStrategyBaseTest):
     FUNCTION_UUID = "3c1c254e-cd4b-4d94-8c74-7ab870b36063"
     SOURCE_HASH = "cae49aa393d669e850bd49869905099d"
     LAYER_UUID = "761ce752-d1c8-4e07-86a0-f64778cdd108"
-    LAYER_METHOD = "nodejs12.x"
+    LAYER_METHOD = "nodejs20.x"
+    LAYER_METHOD = "nodejs20.x"
 
     BUILD_GRAPH_CONTENTS = f"""
     [function_build_definitions]
@@ -356,8 +365,8 @@ class CachedBuildStrategyTest(BuildStrategyBaseTest):
     [layer_build_definitions.{LAYER_UUID}]
     layer_name = "SumLayer"
     codeuri = "sum_layer/"
-    build_method = "nodejs12.x"
-    compatible_runtimes = ["nodejs12.x"]
+    build_method = "nodejs20.x"
+    compatible_runtimes = ["nodejs20.x"]
     source_hash = "{SOURCE_HASH}"
     layer = "SumLayer"
     """
@@ -675,7 +684,7 @@ class TestIncrementalBuildStrategy(TestCase):
 
         self.build_strategy.build()
         self.build_function.assert_called_with(
-            ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, dependency_dir, download_dependencies
+            ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, ANY, dependency_dir, download_dependencies
         )
 
     @parameterized.expand(
@@ -699,6 +708,7 @@ class TestIncrementalBuildStrategy(TestCase):
         given_layer_build_def = Mock(
             manifest_hash=build_toml_manifest_hash, functions=[Mock()], dependencies_dir=dependency_dir
         )
+        given_layer_build_def.layer.compatible_architectures = None
         self.build_graph.get_function_build_definitions.return_value = []
         self.build_graph.get_layer_build_definitions.return_value = [given_layer_build_def]
 
@@ -729,13 +739,13 @@ class TestCachedOrIncrementalBuildStrategyWrapper(TestCase):
 
     @parameterized.expand(
         [
-            "python3.7",
-            "nodejs12.x",
-            "ruby2.7",
+            "python3.12",
+            "nodejs20.x",
+            "ruby3.2",
         ]
     )
     def test_will_call_incremental_build_strategy(self, mocked_read, mocked_write, runtime):
-        build_definition = FunctionBuildDefinition(runtime, "codeuri", "packate_type", X86_64, {}, "handler")
+        build_definition = FunctionBuildDefinition(runtime, "codeuri", None, "package_type", X86_64, {}, "handler")
         self.build_graph.put_function_build_definition(build_definition, Mock(full_path="function_full_path"))
         with patch.object(
             self.build_strategy, "_incremental_build_strategy"
@@ -749,13 +759,13 @@ class TestCachedOrIncrementalBuildStrategyWrapper(TestCase):
 
     @parameterized.expand(
         [
-            "dotnetcore3.1",
+            "dotnet6",
             "go1.x",
             "java11",
         ]
     )
     def test_will_call_cached_build_strategy(self, mocked_read, mocked_write, runtime):
-        build_definition = FunctionBuildDefinition(runtime, "codeuri", "packate_type", X86_64, {}, "handler")
+        build_definition = FunctionBuildDefinition(runtime, "codeuri", None, "package_type", X86_64, {}, "handler")
         self.build_graph.put_function_build_definition(build_definition, Mock(full_path="function_full_path"))
         with patch.object(
             self.build_strategy, "_incremental_build_strategy"
@@ -829,7 +839,7 @@ class TestCachedOrIncrementalBuildStrategyWrapper(TestCase):
             use_container,
         )
 
-        build_definition = FunctionBuildDefinition(runtime, "codeuri", "packate_type", X86_64, {}, "handler")
+        build_definition = FunctionBuildDefinition(runtime, "codeuri", None, "package_type", X86_64, {}, "handler")
         self.build_graph.put_function_build_definition(build_definition, Mock(full_path="function_full_path"))
         with patch.object(
             build_strategy, "_incremental_build_strategy"

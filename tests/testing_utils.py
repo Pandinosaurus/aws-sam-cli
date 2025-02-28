@@ -3,21 +3,28 @@ import os
 import platform
 import subprocess
 import tempfile
+from pathlib import Path
 
 from threading import Thread
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, cast
 from collections import namedtuple
 from subprocess import Popen, PIPE, TimeoutExpired
 from queue import Queue
 
+from samcli import __version__ as SAM_CLI_VERSION
+
 import shutil
 from uuid import uuid4
 
+import boto3
 import psutil
+import docker
+import packaging.version
 
 RUNNING_ON_APPVEYOR = os.environ.get("APPVEYOR", False)
 IS_WINDOWS = platform.system().lower() == "windows"
-RUNNING_ON_CI = RUNNING_ON_APPVEYOR or os.environ.get("CI", False)
+RUNNING_ON_GITHUB_ACTIONS = os.environ.get("CI", False)
+RUNNING_ON_CI = RUNNING_ON_APPVEYOR or RUNNING_ON_GITHUB_ACTIONS
 RUNNING_TEST_FOR_MASTER_ON_CI = (
     os.environ.get("APPVEYOR_REPO_BRANCH", os.environ.get("GITHUB_REF_NAME", "master")) != "master"
 )
@@ -42,6 +49,9 @@ CFN_PYTHON_VERSION_SUFFIX = os.environ.get("PYTHON_VERSION", "0.0.0").replace(".
 
 
 def get_sam_command():
+    windows_bin_path = os.getenv("SAM_WINDOWS_BINARY_PATH")
+    if windows_bin_path:
+        return windows_bin_path
     return "samdev" if os.getenv("SAM_CLI_DEV") else "sam"
 
 
@@ -69,10 +79,10 @@ def run_command(command_list, cwd=None, env=None, timeout=TIMEOUT) -> CommandRes
         raise
 
 
-def run_command_with_input(command_list, stdin_input, timeout=TIMEOUT, cwd=None) -> CommandResult:
+def run_command_with_input(command_list, stdin_input, timeout=TIMEOUT, cwd=None, env=None) -> CommandResult:
     LOG.info("Running command: %s", " ".join(command_list))
     LOG.info("With input: %s", stdin_input)
-    process_execute = Popen(command_list, cwd=cwd, stdout=PIPE, stderr=PIPE, stdin=PIPE)
+    process_execute = Popen(command_list, cwd=cwd, env=env, stdout=PIPE, stderr=PIPE, stdin=PIPE)
     try:
         stdout_data, stderr_data = process_execute.communicate(stdin_input, timeout=timeout)
         LOG.info(f"Stdout: {stdout_data.decode('utf-8')}")
@@ -232,3 +242,65 @@ class FileCreator(object):
         f.full_path('foo/bar.txt') -> /tmp/asdfasd/foo/bar.txt
         """
         return os.path.join(self.rootdir, filename)
+
+
+def _get_current_account_id():
+    sts = boto3.client("sts")
+    account_id = sts.get_caller_identity()["Account"]
+    return account_id
+
+
+def strip_nightly_installer_suffix(request: dict, metric_type: str):
+    """
+    If it's a nightly release version, it will have a suffix.
+    We can strip it for the purpose of testing telemetry.
+    """
+    metrics = request.get("data", {}).get("metrics", [])
+    if not metrics:
+        return
+    version = metrics[0].get(metric_type, {}).get("samcliVersion", "")
+    if version:
+        request["data"]["metrics"][0][metric_type]["samcliVersion"] = version[: len(SAM_CLI_VERSION)]
+
+
+class UpdatableSARTemplate:
+    """
+    This class is used to replace the `${AWS::AccountId}` in the testing templates with the account id for the testing
+    is used during the integration testing. This class helps to resolve the problem that SAM CLI does not support Sub
+    intrinsic function, and to avoid exposing any of our testing accounts ids.
+    """
+
+    def __init__(self, source_template_path):
+        self.source_template_path = source_template_path
+        self.temp_directory = tempfile.TemporaryDirectory()
+        self.temp_directory_path = Path(tempfile.TemporaryDirectory().name)
+        self.updated_template_path = None
+
+    def setup(self):
+        with open(self.source_template_path, "r") as sar_template:
+            updated_template_content = sar_template.read()
+        updated_template_content = updated_template_content.replace("${AWS::AccountId}", _get_current_account_id())
+        self.temp_directory_path.mkdir()
+        self.updated_template_path = os.path.join(self.temp_directory_path, "template.yml")
+        with open(self.updated_template_path, "w") as updated_template:
+            updated_template.write(updated_template_content)
+
+    def clean(self):
+        self.temp_directory.cleanup()
+
+    def __enter__(self):
+        self.setup()
+        return self
+
+    def __exit__(self, *args):
+        self.clean()
+
+
+def _version_gte(version1: str, version2: str) -> bool:
+    v1 = packaging.version.parse(version1)
+    v2 = packaging.version.parse(version2)
+    return v1 >= v2
+
+
+def get_docker_version() -> str:
+    return cast(str, docker.from_env().info().get("ServerVersion", "0.0.0"))
